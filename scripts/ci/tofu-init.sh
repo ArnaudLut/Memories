@@ -13,7 +13,7 @@
 #
 # Variables d'environnement obligatoires :
 #   STATE_BUCKET, STATE_REGION, STATE_ENDPOINT    sorties de infra/bootstrap
-#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY      clé S3 du bucket d'état
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY      clé S3 du bucket des états
 #   TF_VAR_state_passphrase                       phrase de passe de l'état
 
 set -euo pipefail

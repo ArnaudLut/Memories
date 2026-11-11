@@ -1,0 +1,57 @@
+# Levée du verrou de l'état de la préversion. Une exécution annulée ou
+# interrompue pendant qu'OpenTofu planifie ou applique peut laisser ce verrou en
+# place : les suivantes échouent alors avec « Error acquiring the state lock »,
+# et ce message donne l'identifiant à fournir ici. À ne lancer que si aucun
+# autre workflow ne tourne (BOOTSTRAP.md).
+name: Lever le verrou de l'état
+
+on:
+  workflow_dispatch:
+    inputs:
+      lock_id:
+        description: Identifiant du verrou, ligne « ID » du message d'erreur
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Nommer bash active « pipefail » : une étape échoue dès qu'un maillon d'un
+    # tube échoue.
+    shell: bash
+
+jobs:
+  unlock:
+    name: Levée du verrou de la préversion
+    if: vars.OVH_BOOTSTRAPPED == 'true'
+    runs-on: ubuntu-24.04
+    # Ce job ne lit que le bucket des états : il ne reçoit pas le compte de
+    # service d'OVHcloud.
+    env:
+      TF_IN_AUTOMATION: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.STATE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_S3_SECRET_KEY }}
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      STATE_REGION: ${{ vars.STATE_REGION }}
+      STATE_ENDPOINT: ${{ vars.STATE_ENDPOINT }}
+      TF_VAR_state_passphrase: ${{ secrets.STATE_PASSPHRASE }}
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Installer OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+      - name: Initialiser OpenTofu
+        run: scripts/ci/tofu-init.sh infra/envs/preview
+      - name: Lever le verrou
+        env:
+          # L'identifiant passe par l'environnement : une valeur saisie n'est
+          # jamais recopiée dans le texte d'une commande.
+          LOCK_ID: ${{ inputs.lock_id }}
+        run: tofu -chdir=infra/envs/preview force-unlock -force "$LOCK_ID"

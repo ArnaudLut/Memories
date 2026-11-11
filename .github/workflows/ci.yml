@@ -173,5 +173,7 @@ jobs:
       - name: Initialiser OpenTofu
         run: scripts/ci/tofu-init.sh infra/envs/preview
       - name: Planifier et passer le garde-fou
-        # Le résultat s'affiche dans le résumé du job.
-        run: scripts/ci/plan.sh infra/envs/preview
+        # Le résultat s'affiche dans le résumé du job. « exec » : le script
+        # devient le processus de l'étape et reçoit lui-même l'annulation du
+        # job, qu'il transmet à OpenTofu.
+        run: exec scripts/ci/plan.sh infra/envs/preview

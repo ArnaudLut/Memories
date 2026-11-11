@@ -54,14 +54,16 @@ jobs:
         with:
           tofu_version: 1.13.9
           tofu_wrapper: false
+      # L'initialisation précède la recherche de l'image : les contrôles du
+      # verrou et du plan tournent ainsi même quand l'image manque.
+      - name: Initialiser OpenTofu
+        run: scripts/ci/tofu-init.sh infra/envs/preview
       - name: Retrouver l'image de ce commit
         # Le job tourne dans l'image que le workflow « Déployer » a publiée.
         run: |
           docker login ghcr.io --username "$REGISTRY_USER" --password-stdin <<< "$REGISTRY_TOKEN"
           digest=$(scripts/ci/image-digest.sh "$IMAGE_REPOSITORY:$GITHUB_SHA")
           echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
-      - name: Initialiser OpenTofu
-        run: scripts/ci/tofu-init.sh infra/envs/preview
       - name: Préparer le canal de déploiement
         # Les sorties sensibles sont masquées, puis écrites dans des fichiers
         # que le runner supprime à la fin du job.
@@ -71,7 +73,9 @@ jobs:
           tofu -chdir=infra/envs/preview output -json \
             | scripts/ci/prepare-remote.sh preview "$RUNNER_TEMP/remote"
       - name: Contrôler la base depuis l'instance
-        run: scripts/ci/remote.sh job verify > "$RUNNER_TEMP/verify-report.json"
+        # Le rapport complet reste lisible dans le journal de l'étape ; le
+        # tableau de synthèse n'en garde que le verdict de chaque contrôle.
+        run: scripts/ci/remote.sh job verify | tee "$RUNNER_TEMP/verify-report.json"
       # Les contrôles suivants tournent même si un précédent a échoué : le
       # tableau final les montre tous.
       - name: Contrôler le verrou de l'état
@@ -81,7 +85,9 @@ jobs:
       - name: Contrôler que le plan est vide
         id: plan
         if: ${{ !cancelled() }}
-        run: scripts/ci/plan.sh infra/envs/preview --fail-on-change
+        # « exec » : le script devient le processus de l'étape et reçoit
+        # lui-même l'annulation du job, qu'il transmet à OpenTofu.
+        run: exec scripts/ci/plan.sh infra/envs/preview --fail-on-change
       - name: Écrire le tableau de synthèse
         if: ${{ !cancelled() }}
         env:

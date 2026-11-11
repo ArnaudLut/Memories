@@ -3,7 +3,7 @@
 # wait-healthy.sh : attend que le service en ligne annonce la version attendue.
 #
 # Usage : scripts/ci/wait-healthy.sh <URL de /health> <version attendue>
-#   scripts/ci/wait-healthy.sh https://preview.memoire.exemple.fr/health <identifiant du commit>
+#   scripts/ci/wait-healthy.sh https://preview.memoire.example.com/health <identifiant du commit>
 #
 # C'est l'essai de bout en bout d'un déploiement : la requête traverse le DNS,
 # le certificat TLS et Caddy, ce que le contrôle fait sur l'instance ne couvre

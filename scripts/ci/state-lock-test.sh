@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# state-lock-test.sh : vérifie que le bucket d'état refuse une écriture
+# state-lock-test.sh : vérifie que le bucket des états refuse une écriture
 # conditionnelle sur un objet qui existe déjà.
 #
 # Usage : scripts/ci/state-lock-test.sh <clé d'essai>
@@ -19,7 +19,7 @@
 #
 # Variables d'environnement obligatoires :
 #   STATE_BUCKET, STATE_REGION, STATE_ENDPOINT    sorties de infra/bootstrap
-#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY      clé S3 du bucket d'état
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY      clé S3 du bucket des états
 #
 # Dépendance : AWS CLI en version 2.
 

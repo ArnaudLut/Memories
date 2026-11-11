@@ -3,8 +3,11 @@
 #
 # L'étiquette de l'image de base sert à la lecture, l'empreinte fait foi. Debian
 # 13 est retenue parce que ses dépôts officiels fournissent le client
-# PostgreSQL 17. NODE_IMAGE permet de tirer la même image depuis un miroir.
-ARG NODE_IMAGE=node:24.22.2-trixie-slim@sha256:0820eaa85e07d0490446dd01d14707e17e6108a36988cf374899cd057eb3812d
+# PostgreSQL 17. L'image est écrite en clair dans une instruction FROM, la seule
+# forme que Dependabot sait suivre. NODE_IMAGE permet de tirer la même image
+# depuis un miroir ; par défaut, il désigne l'étape qui porte l'image officielle.
+ARG NODE_IMAGE=node-officielle
+FROM node:24.22.2-trixie-slim@sha256:0820eaa85e07d0490446dd01d14707e17e6108a36988cf374899cd057eb3812d AS node-officielle
 
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app

@@ -37,9 +37,22 @@ output=${GITHUB_OUTPUT:-/dev/null}
 
 # Le verrou de l'état arbitre entre les workflows : celui qui arrive pendant
 # qu'un autre planifie ou applique attend son tour.
+#
+# OpenTofu tourne en arrière-plan pour que ce script reste à l'écoute des
+# signaux. À l'annulation d'un job, GitHub ne prévient que le processus de
+# l'étape, c'est-à-dire ce script quand l'étape le lance par « exec » : il
+# transmet l'arrêt à OpenTofu, qui relâche le verrou avant de sortir.
 status=0
-tofu -chdir="$root" plan -input=false -lock-timeout=10m -detailed-exitcode -out=plan.tfplan \
-  || status=$?
+tofu -chdir="$root" plan -input=false -lock-timeout=10m -detailed-exitcode -out=plan.tfplan &
+tofu_pid=$!
+trap 'kill -s TERM "$tofu_pid" 2> /dev/null || true' INT TERM
+wait "$tofu_pid" || status=$?
+# Un signal interrompt « wait » avant la fin d'OpenTofu : on l'attend encore.
+while ((status > 128)) && kill -s 0 "$tofu_pid" 2> /dev/null; do
+  status=0
+  wait "$tofu_pid" || status=$?
+done
+trap - INT TERM
 case $status in
   0)
     echo "changes=false" >> "$output"
@@ -57,7 +70,7 @@ trap 'rm -rf "$tmp"' EXIT
 verdict=0
 if [[ -n $mode ]]; then
   verdict=1
-  echo "Dérive : l'infrastructure ne correspond plus à sa description. Le plan montre ce qu'une application changerait." \
+  echo "Dérive : l'infrastructure ne correspond pas à sa description. Le plan montre ce qu'une application changerait." \
     > "$tmp/verdict"
 else
   tofu -chdir="$root" show -json plan.tfplan > "$tmp/plan.json"

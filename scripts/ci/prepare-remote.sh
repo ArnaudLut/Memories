@@ -41,6 +41,8 @@ environment=$1
 [[ -n ${ACME_EMAIL-} ]] || fail "la variable ACME_EMAIL est obligatoire"
 
 outputs=$(cat)
+[[ -n $outputs ]] \
+  || fail "aucune sortie reçue : « tofu output -json » a échoué, son message figure plus haut"
 
 # Les messages d'erreur de jq peuvent citer la valeur fautive : ils ne sont
 # jamais affichés.

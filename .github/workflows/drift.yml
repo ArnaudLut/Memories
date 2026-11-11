@@ -52,4 +52,6 @@ jobs:
       - name: Initialiser OpenTofu
         run: scripts/ci/tofu-init.sh infra/envs/preview
       - name: Planifier sans rien attendre
-        run: scripts/ci/plan.sh infra/envs/preview --fail-on-change
+        # « exec » : le script devient le processus de l'étape et reçoit
+        # lui-même l'annulation du job, qu'il transmet à OpenTofu.
+        run: exec scripts/ci/plan.sh infra/envs/preview --fail-on-change

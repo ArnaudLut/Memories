@@ -97,10 +97,14 @@ jobs:
         run: scripts/ci/tofu-init.sh infra/envs/preview
       - name: Planifier et passer le garde-fou
         id: plan
-        run: scripts/ci/plan.sh infra/envs/preview
+        # « exec » : le script devient le processus de l'étape et reçoit
+        # lui-même l'annulation du job, qu'il transmet à OpenTofu.
+        run: exec scripts/ci/plan.sh infra/envs/preview
       - name: Appliquer le plan enregistré
         if: steps.plan.outputs.changes == 'true'
-        run: tofu -chdir=infra/envs/preview apply -input=false -lock-timeout=10m plan.tfplan
+        # « exec » : OpenTofu devient le processus de l'étape et reçoit lui-même
+        # l'annulation du job. Il enregistre alors l'état et relâche le verrou.
+        run: exec tofu -chdir=infra/envs/preview apply -input=false -lock-timeout=10m plan.tfplan
       - name: Préparer le canal de déploiement
         # Les sorties sensibles sont masquées, puis écrites dans des fichiers
         # que le runner supprime à la fin du job.
