@@ -258,10 +258,15 @@ trap 'exit 129' HUP
 #   créerait une seconde fois. Il l'ignore donc et finit l'application en
 #   cours ; cette commande s'arrête juste après.
 apply() {
-  if tofu -chdir="$ROOT" show -json 2> /dev/null \
-    | jq --exit-status 'any(.values.root_module.resources[]?; .address == "ovh_cloud_storage_object_bucket.state" and .tainted == true)' > /dev/null; then
+  # L'état est lu dans une variable, sans tube vers jq : après un Ctrl-C pendant
+  # un tube « tofu | jq », le bash 3.2 de macOS n'exécute pas le trap INT et
+  # la commande continuerait comme si de rien n'était.
+  local state_json
+  state_json=$(tofu -chdir="$ROOT" show -json 2> /dev/null) || state_json=''
+  if jq --exit-status 'any(.values.root_module.resources[]?; .address == "ovh_cloud_storage_object_bucket.state" and .tainted == true)' <<< "$state_json" > /dev/null 2>&1; then
     tofu -chdir="$ROOT" untaint ovh_cloud_storage_object_bucket.state
   fi
+  state_json=''
   (
     trap '' HUP
     exec tofu -chdir="$ROOT" apply "$@"
