@@ -49,14 +49,18 @@ tofu fmt -check -recursive infra
 python3 -m unittest discover -s infra/policy/tests
 ```
 
-Puis, dans chacun des répertoires `infra/bootstrap`, `infra/envs/preview` et
-`infra/envs/production` :
+Puis, toujours depuis la racine du dépôt, pour chacune des trois piles :
 
 ```sh
-tofu init -backend=false -input=false -lockfile=readonly
-tofu validate
-tofu test
+for root in infra/bootstrap infra/envs/preview infra/envs/production; do
+  tofu -chdir="$root" init -backend=false -input=false -lockfile=readonly \
+    && tofu -chdir="$root" validate \
+    && tofu -chdir="$root" test || break
+done
 ```
+
+La boucle s'arrête à la première pile en échec ; chacune doit finir sur une
+ligne `Success!`.
 
 Les tests utilisent un fournisseur OVHcloud simulé. Ceux des quatre modules
 sont rangés dans `envs/preview/tests`.
@@ -89,8 +93,8 @@ fondateur. Les autres valeurs se retrouvent ainsi :
   de passe suffisent à lire.
 
 Depuis la racine du dépôt, en quatre temps. Les blocs ne contiennent aucun
-commentaire : dans un terminal, zsh, le shell par défaut de macOS, ne les
-reconnaît pas et en exécuterait le texte.
+commentaire : dans un terminal, zsh, le shell par défaut de macOS, ne
+reconnaît pas les commentaires et en exécuterait le texte.
 
 1. Le bucket des états, d'après les variables du dépôt :
 
@@ -145,9 +149,9 @@ reconnaît pas et en exécuterait le texte.
    ```
 
 Les deux fichiers s'écrivent dans `infra/envs/preview`. `plan.tfplan` est
-chiffré, mais `plan.json` contient les secrets en clair : git l'ignore, et il
-se supprime après usage. Fermez le terminal une fois l'opération terminée :
-son environnement porte les secrets.
+chiffré, mais `plan.json` contient les secrets en clair : git l'ignore.
+Supprimez-le après usage, puis fermez le terminal : son environnement porte
+les secrets.
 
 `tofu output`, `tofu untaint` et `tofu force-unlock` n'ont besoin que du
 bucket, de la clé S3 et de la phrase de passe : la préparation s'arrête alors
@@ -157,8 +161,9 @@ lancent ensuite depuis la racine du dépôt avec l'option
 `-chdir=infra/envs/preview`, par exemple
 `tofu -chdir=infra/envs/preview output`. Sans cette option, OpenTofu ne lit pas
 l'état du bucket : `tofu untaint` répond que l'état ne contient aucune
-ressource (`No such resource instance`), et `tofu output` qu'il n'y a aucune
-sortie (`No outputs found`).
+ressource (`No such resource instance`), `tofu output` qu'il n'y a aucune
+sortie (`No outputs found`), et `tofu force-unlock` qu'il ne peut pas lever un
+verrou local (`Local state cannot be unlocked by another process`).
 
 La pile `bootstrap` se planifie de la même façon, avec l'option
 `-chdir=infra/bootstrap`, les identifiants personnels du fondateur

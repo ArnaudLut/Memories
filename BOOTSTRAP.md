@@ -83,9 +83,10 @@ code le refuse. Pour arrêter la dépense de la préversion :
 1. Désarmez d'abord les workflows, sans quoi le prochain commit de `main`
    recréerait l'instance et la base :
    `gh variable set OVH_BOOTSTRAPPED --body false`.
-2. Attendez la fin des exécutions en cours, que montre `gh run list` : un
-   déploiement déjà lancé va à son terme malgré la variable, et recréerait ce
-   que vous allez supprimer.
+2. Attendez la fin des exécutions en cours : un déploiement déjà lancé va à
+   son terme malgré la variable, et recréerait ce que vous allez supprimer.
+   `gh run watch` propose de choisir celle à suivre ; relancez-le jusqu'à ce
+   qu'il réponde `found no in progress runs to watch`.
 3. Dans l'espace client, ouvrez le service PostgreSQL `memoire-preview` et
    désactivez sa protection contre la suppression, puis supprimez ce service
    et l'instance `memoire-preview`. Les données de la base sont perdues.
@@ -379,6 +380,10 @@ règles suffisent.
 - Ne révoquez les identifiants personnels qu'après le message « Amorçage
   terminé. ».
 
+Pour interrompre la commande, appuyez une seule fois sur Ctrl-C et laissez
+OpenTofu s'arrêter de lui-même : un second Ctrl-C l'arrête net, et il oublie
+alors les ressources qu'il était en train de créer.
+
 Si l'arrêt survient juste après la création de la clé S3, sur une erreur 403 ou
 `InvalidAccessKeyId` pendant l'envoi de l'état vers le bucket, attendez une
 minute et relancez la même commande ; après un `rotate`, relancez-la sans
@@ -659,6 +664,12 @@ Pendant le geste 3 :
   l'espace client affiche pour le bucket ;
 - à une relance, la relecture de la clé S3 par l'API, et pour `rotate` la
   suppression d'un compte de service encore cité par une politique ;
+- la reprise après un arrêt brutal d'OpenTofu pendant le premier amorçage
+  (second Ctrl-C, extinction du poste) : l'état ignore alors ce qui était en
+  cours de création, et la relance le crée de nouveau. L'émulateur accepte ces
+  doublons ; OVHcloud en refusera sans doute certains, comme un second bucket
+  du même nom. Il faudra alors supprimer dans l'espace client ce que la
+  première exécution a laissé, puis relancer la commande ;
 - les libellés exacts du formulaire de création des identifiants, que cette
   page décrit sans avoir pu l'afficher ;
 - la commande sous macOS : elle a été essayée avec bash 3.2, celui de macOS,
