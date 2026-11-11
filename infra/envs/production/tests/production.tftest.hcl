@@ -132,8 +132,15 @@ run "environment" {
   # Le bloc backend n'est pas lisible depuis un test : la clé est relue dans le
   # fichier, car deux racines sous la même clé partageraient le même état.
   assert {
-    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:#.*)?$", file("${path.module}/environment.tf")))) == "production/terraform.tfstate"
+    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:(?:#|//).*)?$", file("${path.module}/environment.tf")))) == "production/terraform.tfstate"
     error_message = "L'état de cet environnement doit être rangé sous la clé production/terraform.tfstate."
+  }
+
+  # La relecture ci-dessus ne reconnaît pas un commentaire /* */ : une clé qui
+  # s'y trouverait passerait pour présente.
+  assert {
+    condition     = length(regexall("(?m)^\\s*/\\*", file("${path.module}/environment.tf"))) == 0
+    error_message = "environment.tf ne doit contenir aucun commentaire ouvert par /* en début de ligne : son contenu serait pris pour du code."
   }
 
   assert {
@@ -162,10 +169,10 @@ run "same_files_as_preview" {
 
   assert {
     condition = alltrue([
-      for name in ["main.tf", "outputs.tf", "variables.tf", "versions.tf"] :
+      for name in setsubtract(setintersection(fileset(path.module, "*.tf"), fileset("${path.module}/../preview", "*.tf")), ["environment.tf"]) :
       file("${path.module}/${name}") == file("${path.module}/../preview/${name}")
     ])
-    error_message = "main.tf, outputs.tf, variables.tf et versions.tf doivent rester identiques à ceux de la préversion : seul environment.tf distingue les deux racines."
+    error_message = "Tous les fichiers .tf autres qu'environment.tf doivent rester identiques à ceux de la préversion : seul environment.tf distingue les deux racines."
   }
 
   assert {

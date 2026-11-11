@@ -159,20 +159,27 @@ run "state_bucket" {
   # La ligne est cherchée dans le bloc du bucket : la même ligne posée sur une
   # autre ressource ne protégerait pas les états.
   assert {
-    condition = length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true\\s*(?:#.*)?$", one(flatten(regexall(
-      "(?s)\\nresource \"ovh_cloud_storage_object_bucket\" \"state\" \\{\\n(.*?)\\n\\}\\n", file("${path.module}/main.tf")
+    condition = length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true\\s*(?:(?:#|//).*)?$", join("\n", flatten(regexall(
+      "(?s)\\nresource \"ovh_cloud_storage_object_bucket\" \"state\" \\{\\n(.*?)\\n\\}\\n", "\n${file("${path.module}/main.tf")}"
     ))))) == 1
     error_message = "Le bucket des états doit garder prevent_destroy."
   }
 
   assert {
-    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:#.*)?$", file("${path.module}/versions.tf")))) == "bootstrap/terraform.tfstate"
+    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:(?:#|//).*)?$", file("${path.module}/versions.tf")))) == "bootstrap/terraform.tfstate"
     error_message = "L'état de cette pile doit être rangé sous la clé bootstrap/terraform.tfstate."
   }
 
   assert {
-    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true\\s*(?:#.*)?$", file("${path.module}/versions.tf"))) == 2
+    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true\\s*(?:(?:#|//).*)?$", file("${path.module}/versions.tf"))) == 2
     error_message = "Le chiffrement de l'état et des plans de cette pile doit rester obligatoire : l'état porte le secret du compte de service et la clé S3."
+  }
+
+  # Les relectures ci-dessus ne reconnaissent pas un commentaire /* */ : une
+  # ligne protégée qui s'y trouverait passerait pour présente.
+  assert {
+    condition     = alltrue([for name in ["main.tf", "versions.tf"] : length(regexall("(?m)^\\s*/\\*", file("${path.module}/${name}"))) == 0])
+    error_message = "main.tf et versions.tf ne doivent contenir aucun commentaire ouvert par /* en début de ligne : les tests qui relisent ces fichiers prendraient son contenu pour du code."
   }
 
   assert {

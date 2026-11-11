@@ -219,7 +219,7 @@ run "environment" {
   # Le bloc backend n'est pas lisible depuis un test : la clé est relue dans le
   # fichier, car deux racines sous la même clé partageraient le même état.
   assert {
-    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:#.*)?$", file("${path.module}/environment.tf")))) == "preview/terraform.tfstate"
+    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:(?:#|//).*)?$", file("${path.module}/environment.tf")))) == "preview/terraform.tfstate"
     error_message = "L'état de cet environnement doit être rangé sous la clé preview/terraform.tfstate."
   }
 
@@ -270,7 +270,7 @@ run "environment" {
         ]
         } : [
         for pattern in patterns :
-        length(regexall("(?m)^\\s*${pattern}\\s*(?:#.*)?$", one(flatten(regexall("(?s)\\n${block} \\{\\n(.*?)\\n\\}\\n", "\n${file("${path.module}/main.tf")}"))))) == 1
+        length(regexall("(?m)^\\s*${pattern}\\s*(?:(?:#|//).*)?$", join("\n", flatten(regexall("(?s)\\n${block} \\{\\n(.*?)\\n\\}\\n", "\n${file("${path.module}/main.tf")}"))))) == 1
       ]
     ]))
     error_message = "Un module ne reçoit plus la valeur attendue : main.tf doit relier le réseau, l'instance, la base et le DNS aux variables de l'environnement."
@@ -280,20 +280,20 @@ run "environment" {
   assert {
     condition = alltrue([
       for resource in ["ovh_cloud_project_database", "ovh_cloud_project_database_database"] :
-      length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true\\s*(?:#.*)?$", one(flatten(regexall(
-        "(?s)\\nresource \"${resource}\" \"this\" \\{\\n(.*?)\\n\\}\\n", file("${path.module}/../../modules/database/main.tf")
+      length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true\\s*(?:(?:#|//).*)?$", join("\n", flatten(regexall(
+        "(?s)\\nresource \"${resource}\" \"this\" \\{\\n(.*?)\\n\\}\\n", "\n${file("${path.module}/../../modules/database/main.tf")}"
       ))))) == 1
     ])
     error_message = "Le service de base de données et la base doivent garder prevent_destroy."
   }
 
   assert {
-    condition     = length(regexall("(?m)^\\s*ignore_changes\\s*=\\s*\\[\\s*image_id\\s*,?\\s*\\]\\s*(?:#.*)?$", file("${path.module}/../../modules/instance/main.tf"))) == 1
+    condition     = length(regexall("(?m)^\\s*ignore_changes\\s*=\\s*\\[\\s*image_id\\s*,?\\s*\\]\\s*(?:(?:#|//).*)?$", file("${path.module}/../../modules/instance/main.tf"))) == 1
     error_message = "L'image de l'instance doit rester ignorée après la création : la changer efface le disque."
   }
 
   assert {
-    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true\\s*(?:#.*)?$", file("${path.module}/versions.tf"))) == 2
+    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true\\s*(?:(?:#|//).*)?$", file("${path.module}/versions.tf"))) == 2
     error_message = "Le chiffrement de l'état et des plans doit rester obligatoire."
   }
 
@@ -305,8 +305,18 @@ run "environment" {
   # La base est remplacée par des sorties fixes dans les tests appliqués : la
   # sortie du module est donc relue dans son fichier.
   assert {
-    condition     = length(regexall("(?m)^\\s*value\\s*=\\s*data\\.ovh_cloud_project_database_certificates\\.this\\.ca\\s*(?:#.*)?$", file("${path.module}/../../modules/database/outputs.tf"))) == 1
+    condition     = length(regexall("(?m)^\\s*value\\s*=\\s*data\\.ovh_cloud_project_database_certificates\\.this\\.ca\\s*(?:(?:#|//).*)?$", file("${path.module}/../../modules/database/outputs.tf"))) == 1
     error_message = "La sortie ca_pem du module doit publier le certificat lu auprès du service."
+  }
+
+  # Les relectures ci-dessus ne reconnaissent pas un commentaire /* */ : une
+  # ligne protégée qui s'y trouverait passerait pour présente.
+  assert {
+    condition = alltrue([
+      for name in ["environment.tf", "main.tf", "versions.tf", "../../modules/database/main.tf", "../../modules/database/outputs.tf", "../../modules/instance/main.tf"] :
+      length(regexall("(?m)^\\s*/\\*", file("${path.module}/${name}"))) == 0
+    ])
+    error_message = "Les fichiers relus par ces tests ne doivent contenir aucun commentaire ouvert par /* en début de ligne : son contenu serait pris pour du code."
   }
 
   assert {
