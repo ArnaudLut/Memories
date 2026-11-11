@@ -8,7 +8,7 @@ terraform {
     }
   }
 
-  # Le bucket d'état est créé par cette pile : la première application se fait
+  # Le bucket des états est créé par cette pile : la première application se fait
   # donc avec un état local, grâce à un fichier backend_override.tf temporaire
   # que pose scripts/bootstrap.sh, puis l'état est migré ici.
   backend "s3" {

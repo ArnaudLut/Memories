@@ -1,6 +1,6 @@
 # Tout ce qui distingue cet environnement de l'autre tient dans ce fichier.
 # Les autres fichiers de la racine sont identiques dans les deux environnements,
-# ce que vérifie un essai de cette racine.
+# ce que vérifie un test de cette racine.
 
 terraform {
   # Le bucket, sa région et son point d'accès sont donnés à l'initialisation ;

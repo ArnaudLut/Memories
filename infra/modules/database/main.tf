@@ -8,7 +8,7 @@ locals {
 }
 
 # Le compte avnadmin et les rôles SQL ne sont pas déclarés ici : le premier fait
-# planter le fournisseur 2.24.0, les seconds sont créés en SQL par le travail
+# planter le fournisseur 2.24.0, les seconds sont créés en SQL par le job
 # d'amorçage de la base.
 resource "ovh_cloud_project_database" "this" {
   service_name = var.project_id

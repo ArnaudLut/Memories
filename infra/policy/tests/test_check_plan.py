@@ -1,4 +1,4 @@
-"""Essais du garde-fou des plans.
+"""Tests du garde-fou des plans.
 
 Les fichiers de fixtures/ sont de vrais plans, produits hors ligne par OpenTofu
 1.13.9 et le fournisseur ovh 2.24.0 puis réduits aux champs que lit le

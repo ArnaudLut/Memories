@@ -1,4 +1,4 @@
-# Essais joués avec un fournisseur OVHcloud simulé : aucun appel à l'API,
+# Tests joués avec un fournisseur OVHcloud simulé : aucun appel à l'API,
 # aucune ressource réelle. Ils restent en mode plan, car la protection du
 # bucket contre la destruction ferait échouer le nettoyage d'une application.
 
@@ -16,7 +16,7 @@ mock_provider "ovh" {
 
   mock_data "ovh_domain_zone" {
     defaults = {
-      urn = "urn:v1:eu:resource:dnsZone:exemple.fr"
+      urn = "urn:v1:eu:resource:dnsZone:example.com"
     }
   }
 
@@ -35,7 +35,7 @@ mock_provider "ovh" {
 
 variables {
   project_id       = "0123456789abcdef0123456789abcdef"
-  dns_zone         = "exemple.fr"
+  dns_zone         = "example.com"
   state_passphrase = "phrase-de-passe-des-essais"
 }
 
@@ -49,7 +49,7 @@ run "ci_policy" {
 
   assert {
     condition = join(" ", sort(ovh_iam_policy.ci.resources)) == join(" ", [
-      "urn:v1:eu:resource:dnsZone:exemple.fr",
+      "urn:v1:eu:resource:dnsZone:example.com",
       "urn:v1:eu:resource:publicCloudProject:0123456789abcdef0123456789abcdef",
     ])
     error_message = "La politique ne doit porter que sur le projet et sur la zone DNS."
@@ -83,6 +83,54 @@ run "ci_policy" {
     condition     = ovh_iam_policy.ci.deny == null && ovh_iam_policy.ci.except == null && ovh_iam_policy.ci.permissions_groups == null
     error_message = "La politique ne doit reposer que sur sa liste d'actions autorisées."
   }
+
+  # La liste entière est comparée : un simple décompte laisserait passer une
+  # action remplacée par une autre. BOOTSTRAP.md annonce leur nombre.
+  assert {
+    condition = join(" ", sort(ovh_iam_policy.ci.allow)) == join(" ", [
+      "dnsZone:apiovh:record/create",
+      "dnsZone:apiovh:record/delete",
+      "dnsZone:apiovh:record/edit",
+      "dnsZone:apiovh:record/get",
+      "dnsZone:apiovh:refresh",
+      "publicCloudProject:apiovh:database/availability/get",
+      "publicCloudProject:apiovh:database/postgresql/advancedConfiguration/get",
+      "publicCloudProject:apiovh:database/postgresql/certificates/get",
+      "publicCloudProject:apiovh:database/postgresql/create",
+      "publicCloudProject:apiovh:database/postgresql/database/create",
+      "publicCloudProject:apiovh:database/postgresql/database/get",
+      "publicCloudProject:apiovh:database/postgresql/edit",
+      "publicCloudProject:apiovh:database/postgresql/get",
+      "publicCloudProject:apiovh:database/postgresql/node/get",
+      "publicCloudProject:apiovh:database/postgresql/user/credentials/reset",
+      "publicCloudProject:apiovh:database/postgresql/user/get",
+      "publicCloudProject:apiovh:instance/create",
+      "publicCloudProject:apiovh:instance/delete",
+      "publicCloudProject:apiovh:instance/edit",
+      "publicCloudProject:apiovh:instance/get",
+      "publicCloudProject:apiovh:instance/usePublicIP",
+      "publicCloudProject:apiovh:network/create",
+      "publicCloudProject:apiovh:network/delete",
+      "publicCloudProject:apiovh:network/edit",
+      "publicCloudProject:apiovh:network/get",
+      "publicCloudProject:apiovh:network/subnet/create",
+      "publicCloudProject:apiovh:network/subnet/delete",
+      "publicCloudProject:apiovh:network/subnet/edit",
+      "publicCloudProject:apiovh:network/subnet/get",
+      "publicCloudProject:apiovh:reference/instance/flavor/get",
+      "publicCloudProject:apiovh:reference/instance/image/get",
+      "publicCloudProject:apiovh:securityGroup/create",
+      "publicCloudProject:apiovh:securityGroup/delete",
+      "publicCloudProject:apiovh:securityGroup/edit",
+      "publicCloudProject:apiovh:securityGroup/get",
+    ])
+    error_message = "La liste des actions a changé : toute action ajoutée ou retirée se décide ici, et BOOTSTRAP.md annonce leur nombre, 35."
+  }
+
+  assert {
+    condition     = ovh_me_api_oauth2_client.ci.flow == "CLIENT_CREDENTIALS"
+    error_message = "Le compte de service de la CI doit s'authentifier sans utilisateur."
+  }
 }
 
 run "state_bucket" {
@@ -90,17 +138,37 @@ run "state_bucket" {
 
   assert {
     condition     = ovh_cloud_storage_object_bucket.state.name == "memoire-state-0123456789abcdef0123456789abcdef" && ovh_cloud_storage_object_bucket.state.region == "GRA"
-    error_message = "Le bucket d'état doit porter l'identifiant du projet et se trouver à Gravelines."
+    error_message = "Le bucket des états doit porter l'identifiant du projet et se trouver à Gravelines."
   }
 
   assert {
     condition     = ovh_cloud_storage_object_bucket.state.versioning.status == "ENABLED" && ovh_cloud_storage_object_bucket.state.encryption.algorithm == "AES256"
-    error_message = "Le bucket d'état doit conserver les versions successives et chiffrer ses objets."
+    error_message = "Le bucket des états doit conserver les versions successives et chiffrer ses objets."
   }
 
   assert {
     condition     = ovh_cloud_storage_object_bucket.state.owner_user_id == null
     error_message = "Le bucket ne doit pas appartenir à l'utilisateur S3 de la CI."
+  }
+
+  assert {
+    condition     = join(" ", ovh_cloud_project_user.state.role_names) == "objectstore_operator"
+    error_message = "L'utilisateur S3 ne doit recevoir que le rôle objectstore_operator."
+  }
+
+  assert {
+    condition     = length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true$", file("${path.module}/main.tf"))) == 1
+    error_message = "Le bucket des états doit garder prevent_destroy."
+  }
+
+  assert {
+    condition     = one(flatten(regexall("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/versions.tf")))) == "bootstrap/terraform.tfstate"
+    error_message = "L'état de cette pile doit être rangé sous la clé bootstrap/terraform.tfstate."
+  }
+
+  assert {
+    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true$", file("${path.module}/versions.tf"))) == 2
+    error_message = "Le chiffrement de l'état et des plans de cette pile doit rester obligatoire : l'état porte le secret du compte de service et la clé S3."
   }
 
   assert {
@@ -111,7 +179,7 @@ run "state_bucket" {
         resource == "arn:aws:s3:::memoire-state-0123456789abcdef0123456789abcdef" || resource == "arn:aws:s3:::memoire-state-0123456789abcdef0123456789abcdef/*"
       ])
     ])
-    error_message = "La politique S3 ne doit donner accès qu'au bucket d'état."
+    error_message = "La politique S3 ne doit donner accès qu'au bucket des états."
   }
 
   assert {

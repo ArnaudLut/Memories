@@ -25,13 +25,13 @@ output "state_endpoint" {
 }
 
 output "state_access_key" {
-  description = "Clé d'accès S3 limitée au bucket d'état."
+  description = "Clé d'accès S3 limitée au bucket des états."
   value       = ovh_cloud_project_user_s3_credential.state.access_key_id
   sensitive   = true
 }
 
 output "state_secret_key" {
-  description = "Clé secrète S3 limitée au bucket d'état."
+  description = "Clé secrète S3 limitée au bucket des états."
   value       = ovh_cloud_project_user_s3_credential.state.secret_access_key
   sensitive   = true
 }

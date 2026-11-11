@@ -1,6 +1,6 @@
-# Essais joués avec un fournisseur OVHcloud simulé : aucun appel à l'API,
+# Tests joués avec un fournisseur OVHcloud simulé : aucun appel à l'API,
 # aucune ressource réelle. La production n'est ni planifiée ni appliquée avant
-# la fin de l'étape 2 : ces essais empêchent sa racine de s'écarter de celle de
+# la fin de l'étape 2 : ces tests empêchent sa racine de s'écarter de celle de
 # la préversion d'ici là.
 
 mock_provider "ovh" {
@@ -115,9 +115,9 @@ mock_provider "ovh" {
 
 variables {
   project_id       = "0123456789abcdef0123456789abcdef"
-  dns_zone         = "exemple.fr"
-  hostname         = "memoire.exemple.fr"
-  acme_email       = "contact@exemple.fr"
+  dns_zone         = "example.com"
+  hostname         = "memoire.example.com"
+  acme_email       = "contact@example.com"
   state_passphrase = "phrase-de-passe-des-essais"
 }
 
@@ -129,7 +129,7 @@ run "environment" {
     error_message = "Les ressources de cet environnement doivent s'appeler memoire-production."
   }
 
-  # Le bloc backend n'est pas lisible depuis un essai : la clé est relue dans le
+  # Le bloc backend n'est pas lisible depuis un test : la clé est relue dans le
   # fichier, car deux racines sous la même clé partageraient le même état.
   assert {
     condition     = one(flatten(regexall("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/environment.tf")))) == "production/terraform.tfstate"

@@ -16,6 +16,8 @@
 #
 # « rotate » remplace le compte de service et la clé S3, puis met à jour les
 # secrets du dépôt. Aucun workflow ne doit tourner pendant ce temps.
+# Si elle s'arrête une fois le renouvellement appliqué, c'est la commande sans
+# « rotate » qui reprend : avec « rotate », tout serait renouvelé une seconde fois.
 #
 # La commande se relance sans risque. Elle travaille toujours sur une copie
 # locale de l'état, chiffrée, qu'elle renvoie dans le bucket à la fin : après
@@ -105,7 +107,7 @@ use_local_state() {
   tofu -chdir="$ROOT" init -input=false -lockfile=readonly "$@"
 }
 
-# Relit par l'API la clé S3 du bucket d'état : GitHub ne rend pas les secrets
+# Relit par l'API la clé S3 du bucket des états : GitHub ne rend pas les secrets
 # qu'on lui confie, et cette clé n'est conservée nulle part ailleurs.
 recover_state_key() {
   local users=/cloud/project/$project_id/user user
@@ -122,10 +124,15 @@ recover_state_key() {
 
 on_exit() {
   local status=$?
-  ((status == 0)) || info "bootstrap.sh : arrêt avant la fin. Une fois la cause corrigée, relancez la même commande : elle reprend où elle s'était arrêtée. Ne supprimez pas $ROOT/terraform.tfstate."
+  ((status != 0)) || return 0
+  if [[ -n $rotated ]]; then
+    info "bootstrap.sh : arrêt après le renouvellement. Une fois la cause corrigée, relancez scripts/bootstrap.sh sans « rotate » : la commande inscrit alors les nouveaux secrets et range l'état. Avec « rotate », elle renouvellerait tout une seconde fois. Ne supprimez pas $ROOT/terraform.tfstate."
+  else
+    info "bootstrap.sh : arrêt avant la fin. Une fois la cause corrigée, relancez la même commande : elle reprend où elle s'était arrêtée. Ne supprimez pas $ROOT/terraform.tfstate."
+  fi
 }
 
-action=bootstrap project_id='' dns_zone='' preview_hostname='' acme_email=''
+action=bootstrap rotated='' project_id='' dns_zone='' preview_hostname='' acme_email=''
 while (($# > 0)); do
   case $1 in
     rotate)
@@ -200,6 +207,13 @@ email_pattern='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$'
   || die "le nom « $preview_hostname » n'appartient pas à la zone $dns_zone"
 [[ $acme_email =~ $email_pattern ]] || die "l'adresse « $acme_email » est mal formée"
 
+# Le nom du projet est affiché avant toute création : un identifiant recopié
+# d'un autre projet du même compte se voit ici.
+project_name=$(ovh_api GET "/cloud/project/$project_id" \
+  | jq --raw-output '.description // .projectName // empty') \
+  || die "le projet $project_id est introuvable avec ces identifiants OVHcloud"
+info "Projet Public Cloud : ${project_name:-sans nom} ($project_id)"
+
 # 4. Phrase de passe de l'état.
 if [[ -z ${STATE_PASSPHRASE-} ]]; then
   [[ $state == none ]] \
@@ -241,6 +255,7 @@ if [[ $action == rotate ]]; then
   tofu -chdir="$ROOT" apply \
     -replace=ovh_me_api_oauth2_client.ci \
     -replace=ovh_cloud_project_user_s3_credential.state
+  rotated=yes
 else
   tofu -chdir="$ROOT" apply
 fi

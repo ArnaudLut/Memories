@@ -20,7 +20,7 @@ locals {
 }
 
 # Mots de passe des rôles SQL. Le fournisseur ne crée aucun rôle : ils servent
-# au travail d'amorçage de la base, puis au service.
+# au job d'amorçage de la base, puis au service.
 resource "random_password" "database_role" {
   for_each = toset(local.sql_roles)
 

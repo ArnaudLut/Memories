@@ -4,7 +4,7 @@ variable "project_id" {
 }
 
 variable "dns_zone" {
-  description = "Zone DNS hébergée chez OVHcloud, par exemple exemple.fr."
+  description = "Zone DNS hébergée chez OVHcloud, par exemple memoire.example.com."
   type        = string
 }
 

@@ -1,5 +1,5 @@
-# Essais joués avec un fournisseur OVHcloud simulé : aucun appel à l'API,
-# aucune ressource réelle. Les essais des quatre modules sont rangés ici parce
+# Tests joués avec un fournisseur OVHcloud simulé : aucun appel à l'API,
+# aucune ressource réelle. Les tests des quatre modules sont rangés ici parce
 # que « tofu test » a besoin d'une racine initialisée.
 
 mock_provider "ovh" {
@@ -202,9 +202,9 @@ mock_provider "ovh" {
 
 variables {
   project_id       = "0123456789abcdef0123456789abcdef"
-  dns_zone         = "exemple.fr"
-  hostname         = "preview.memoire.exemple.fr"
-  acme_email       = "contact@exemple.fr"
+  dns_zone         = "example.com"
+  hostname         = "preview.memoire.example.com"
+  acme_email       = "contact@example.com"
   state_passphrase = "phrase-de-passe-des-essais"
 }
 
@@ -216,11 +216,64 @@ run "environment" {
     error_message = "Les ressources de cet environnement doivent s'appeler memoire-preview."
   }
 
-  # Le bloc backend n'est pas lisible depuis un essai : la clé est relue dans le
+  # Le bloc backend n'est pas lisible depuis un test : la clé est relue dans le
   # fichier, car deux racines sous la même clé partageraient le même état.
   assert {
     condition     = one(flatten(regexall("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/environment.tf")))) == "preview/terraform.tfstate"
     error_message = "L'état de cet environnement doit être rangé sous la clé preview/terraform.tfstate."
+  }
+
+  # Les arguments passés aux modules ne se lisent pas non plus depuis un test :
+  # chacun est relu dans main.tf, sur une ligne entière, avec le nombre de fois
+  # où il est attendu.
+  assert {
+    condition = alltrue([
+      for pattern, count in {
+        "region\\s+= var\\.compute_region"                   = 2
+        "vlan_id\\s+= var\\.private_vlan_id"                 = 1
+        "cidr\\s+= var\\.private_subnet_cidr"                = 1
+        "network_id\\s+= module\\.network\\.network_id"      = 2
+        "subnet_id\\s+= module\\.network\\.subnet_id"        = 2
+        "user_data\\s+= local\\.user_data"                   = 1
+        "app_env\\s+= local\\.environment"                   = 1
+        "admin_public_keys\\s+= var\\.admin_ssh_public_keys" = 1
+        "region\\s+= var\\.database_region"                  = 1
+        "backup_region\\s+= var\\.database_backup_region"    = 1
+        "plan\\s+= var\\.database_plan"                      = 1
+        "allowed_cidr\\s+= var\\.private_subnet_cidr"        = 1
+        "hostname\\s+= var\\.hostname"                       = 1
+        "ipv4\\s+= module\\.instance\\.ipv4"                 = 1
+        "project_id\\s+= var\\.project_id"                   = 3
+        "name\\s+= local\\.name"                             = 3
+        "flavor_name\\s+= var\\.instance_flavor"             = 1
+        "image_name\\s+= var\\.instance_image"               = 1
+        "flavor\\s+= var\\.database_flavor"                  = 1
+        "engine_version\\s+= var\\.database_version"         = 1
+        "zone\\s+= var\\.dns_zone"                           = 1
+      } : length(regexall("(?m)^\\s*${pattern}$", file("${path.module}/main.tf"))) == count
+    ])
+    error_message = "Un module ne reçoit plus la valeur attendue : main.tf doit relier le réseau, l'instance, la base et le DNS aux variables de l'environnement."
+  }
+
+  # Protections qui tiennent en une ligne et qu'aucun plan simulé ne montre.
+  assert {
+    condition     = length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true$", file("${path.module}/../../modules/database/main.tf"))) == 2
+    error_message = "Le service de base de données et la base doivent garder prevent_destroy."
+  }
+
+  assert {
+    condition     = length(regexall("(?m)^\\s*ignore_changes\\s*=\\s*\\[image_id\\]$", file("${path.module}/../../modules/instance/main.tf"))) == 1
+    error_message = "L'image de l'instance doit rester ignorée après la création : la changer efface le disque."
+  }
+
+  assert {
+    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true$", file("${path.module}/versions.tf"))) == 2
+    error_message = "Le chiffrement de l'état et des plans doit rester obligatoire."
+  }
+
+  assert {
+    condition     = !strcontains(file("${path.module}/../../modules/network/main.tf"), "gateway_ip")
+    error_message = "Le sous-réseau privé ne doit déclarer aucune passerelle : l'instance y gagnerait une seconde route par défaut."
   }
 
   assert {
@@ -239,7 +292,7 @@ run "environment" {
   }
 
   assert {
-    condition     = output.public_hostname == "preview.memoire.exemple.fr"
+    condition     = output.public_hostname == "preview.memoire.example.com"
     error_message = "Le nom public doit être celui de la variable hostname."
   }
 
@@ -257,7 +310,7 @@ run "environment" {
 run "environment_secrets" {
   # Les clés et les mots de passe n'existent qu'après application. La base est
   # remplacée par des sorties fixes : sa protection contre la destruction ferait
-  # échouer le nettoyage de fin d'essai.
+  # échouer le nettoyage de fin de test.
   override_module {
     target = module.database
     outputs = {
@@ -302,6 +355,66 @@ run "environment_secrets" {
   assert {
     condition     = strcontains(local.user_data, filebase64("${path.module}/../../../deploy/host/memoire-deploy"))
     error_message = "Le document cloud-init doit embarquer la commande forcée memoire-deploy."
+  }
+
+  assert {
+    condition     = output.ssh_host_public_key == trimspace(tls_private_key.ssh_host.public_key_openssh) && output.deploy_ssh_private_key == tls_private_key.deploy.private_key_openssh
+    error_message = "La clé d'hôte publiée doit être celle de l'instance, et la clé privée publiée celle du canal de déploiement."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data, jsonencode(tls_private_key.ssh_host.private_key_openssh)) && strcontains(local.user_data, jsonencode(trimspace(tls_private_key.ssh_host.public_key_openssh)))
+    error_message = "Le document cloud-init doit installer la clé d'hôte SSH que la CI épingle."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data, "APP_ENV=preview\n") && strcontains(local.user_data, "IMAGE_REPOSITORY=${var.image_repository}\n")
+    error_message = "Le document cloud-init doit porter l'environnement et le dépôt d'images de cette racine."
+  }
+
+  assert {
+    condition     = output.database_ca_pem == "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    error_message = "La sortie database_ca_pem doit publier le certificat de l'autorité de la base."
+  }
+
+  assert {
+    condition     = !strcontains(local.user_data, "- name: ops")
+    error_message = "Sans clé d'administrateur, le document cloud-init ne doit créer aucun compte d'administration."
+  }
+}
+
+run "environment_admin_account" {
+  # Même montage que le test précédent, avec une clé d'administrateur.
+  variables {
+    admin_ssh_public_keys = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGNsZS1kZS10ZXN0LWR1LWZvbmRhdGV1ci0wMDAwMDAw fondateur@poste\n"]
+  }
+
+  override_module {
+    target = module.database
+    outputs = {
+      host       = "postgresql-exemple.database.cloud.ovh.net"
+      port       = 20184
+      name       = "memoire"
+      cluster_id = "d0000000-0000-4000-8000-000000000001"
+      ca_pem     = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    }
+  }
+
+  # Les images cloud d'Ubuntu ont déjà un groupe système admin : useradd
+  # refuserait de créer un compte de ce nom, sans que le déploiement le montre.
+  assert {
+    condition     = strcontains(local.user_data, "\n  - name: ops\n") && !strcontains(local.user_data, "- name: admin")
+    error_message = "Le compte d'administration doit s'appeler ops."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data, "\n      AllowUsers deploy ops\n")
+    error_message = "sshd ne doit admettre que les comptes deploy et ops."
+  }
+
+  assert {
+    condition     = strcontains(local.user_data, "ssh_authorized_keys: [\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGNsZS1kZS10ZXN0LWR1LWZvbmRhdGV1ci0wMDAwMDAw fondateur@poste\"]\n")
+    error_message = "Le compte d'administration doit recevoir les clés fournies, sans leur saut de ligne final."
   }
 }
 
@@ -394,11 +507,11 @@ run "instance" {
   }
 
   assert {
-    condition = [for rule in ovh_cloud_security_group.this.rule : "${rule.direction} ${rule.ethernet_type} ${rule.protocol} ${rule.port_range_min}-${rule.port_range_max} ${rule.remote_ip_prefix}"] == [
-      "INGRESS IPV4 TCP 22-22 0.0.0.0/0",
-      "INGRESS IPV4 TCP 80-80 0.0.0.0/0",
-      "INGRESS IPV4 TCP 443-443 0.0.0.0/0",
-      "INGRESS IPV4 UDP 443-443 0.0.0.0/0",
+    condition = [for rule in ovh_cloud_security_group.this.rule : "${rule.direction} ${rule.ethernet_type} ${rule.protocol} ${rule.port_range_min}-${rule.port_range_max} ${rule.remote_ip_prefix} ${rule.description}"] == [
+      "INGRESS IPV4 TCP 22-22 0.0.0.0/0 SSH",
+      "INGRESS IPV4 TCP 80-80 0.0.0.0/0 HTTP",
+      "INGRESS IPV4 TCP 443-443 0.0.0.0/0 HTTPS",
+      "INGRESS IPV4 UDP 443-443 0.0.0.0/0 HTTP/3",
     ]
     error_message = "Seuls les ports 22, 80 et 443 doivent être ouverts en entrée."
   }
@@ -467,6 +580,36 @@ run "instance_user_data_too_large" {
   }
 
   expect_failures = [var.user_data]
+}
+
+run "network" {
+  command = plan
+
+  module {
+    source = "../../modules/network"
+  }
+
+  variables {
+    region  = "GRA11"
+    name    = "memoire-essai"
+    vlan_id = 10
+    cidr    = "10.10.0.0/24"
+  }
+
+  assert {
+    condition     = ovh_cloud_network_private_vrack.this.region == "GRA11" && ovh_cloud_network_private_vrack.this.vlan_id == 10
+    error_message = "Le réseau doit être créé dans la région demandée, sur le VLAN demandé."
+  }
+
+  assert {
+    condition     = ovh_cloud_network_private_vrack_subnet.this.region == "GRA11" && ovh_cloud_network_private_vrack_subnet.this.cidr == "10.10.0.0/24" && ovh_cloud_network_private_vrack_subnet.this.network_id == ovh_cloud_network_private_vrack.this.id
+    error_message = "Le sous-réseau doit porter la plage demandée, dans le réseau du module."
+  }
+
+  assert {
+    condition     = ovh_cloud_network_private_vrack_subnet.this.dhcp_enabled && join(" ", ovh_cloud_network_private_vrack_subnet.this.dns_nameservers) == "213.186.33.99"
+    error_message = "Le DHCP doit rester actif, avec le résolveur d'OVHcloud."
+  }
 }
 
 run "network_rejects_untagged_vlan" {
@@ -572,19 +715,24 @@ run "dns_subdomain" {
   }
 
   variables {
-    zone     = "exemple.fr"
-    hostname = "preview.memoire.exemple.fr"
+    zone     = "example.com"
+    hostname = "preview.memoire.example.com"
     ipv4     = "203.0.113.10"
   }
 
   assert {
-    condition     = ovh_domain_zone_record.this.subdomain == "preview.memoire" && ovh_domain_zone_record.this.zone == "exemple.fr"
+    condition     = ovh_domain_zone_record.this.subdomain == "preview.memoire" && ovh_domain_zone_record.this.zone == "example.com"
     error_message = "Le sous-domaine doit être le nom d'hôte privé du suffixe de la zone."
   }
 
   assert {
     condition     = ovh_domain_zone_record.this.fieldtype == "A" && ovh_domain_zone_record.this.target == "203.0.113.10"
     error_message = "L'enregistrement doit être un A vers l'adresse de l'instance."
+  }
+
+  assert {
+    condition     = ovh_domain_zone_record.this.ttl == 300
+    error_message = "L'enregistrement doit expirer au bout de cinq minutes."
   }
 }
 
@@ -596,8 +744,8 @@ run "dns_zone_apex" {
   }
 
   variables {
-    zone     = "exemple.fr"
-    hostname = "exemple.fr"
+    zone     = "example.com"
+    hostname = "example.com"
     ipv4     = "203.0.113.10"
   }
 
@@ -615,8 +763,8 @@ run "dns_rejects_foreign_hostname" {
   }
 
   variables {
-    zone     = "exemple.fr"
-    hostname = "memoire.autre-exemple.fr"
+    zone     = "example.com"
+    hostname = "memoire.example.org"
     ipv4     = "203.0.113.10"
   }
 
