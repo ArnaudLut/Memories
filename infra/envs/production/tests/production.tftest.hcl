@@ -137,10 +137,12 @@ run "environment" {
   }
 
   # La relecture ci-dessus ne reconnaît pas un commentaire /* */ : une clé qui
-  # s'y trouverait passerait pour présente.
+  # s'y trouverait passerait pour présente. Tout /* qui n'est pas refermé sur
+  # sa ligne est donc refusé, hors des chaînes entre guillemets, qui sont
+  # d'abord vidées.
   assert {
-    condition     = length(regexall("(?m)^\\s*/\\*", file("${path.module}/environment.tf"))) == 0
-    error_message = "environment.tf ne doit contenir aucun commentaire ouvert par /* en début de ligne : son contenu serait pris pour du code."
+    condition     = length(regexall("(?m)/\\*(?:[^*\\n]|\\*+[^*/\\n])*\\**$", replace(file("${path.module}/environment.tf"), "/\"(?:[^\"\\\\\\n]|\\\\.)*\"/", "\"\""))) == 0
+    error_message = "environment.tf ne doit contenir aucun /* sans */ sur la même ligne : le contenu d'un commentaire étalé sur plusieurs lignes serait pris pour du code."
   }
 
   assert {

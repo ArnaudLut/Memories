@@ -176,10 +176,12 @@ run "state_bucket" {
   }
 
   # Les relectures ci-dessus ne reconnaissent pas un commentaire /* */ : une
-  # ligne protégée qui s'y trouverait passerait pour présente.
+  # ligne protégée qui s'y trouverait passerait pour présente. Tout /* qui
+  # n'est pas refermé sur sa ligne est donc refusé, hors des chaînes entre
+  # guillemets, qui sont d'abord vidées.
   assert {
-    condition     = alltrue([for name in ["main.tf", "versions.tf"] : length(regexall("(?m)^\\s*/\\*", file("${path.module}/${name}"))) == 0])
-    error_message = "main.tf et versions.tf ne doivent contenir aucun commentaire ouvert par /* en début de ligne : les tests qui relisent ces fichiers prendraient son contenu pour du code."
+    condition     = alltrue([for name in ["main.tf", "versions.tf"] : length(regexall("(?m)/\\*(?:[^*\\n]|\\*+[^*/\\n])*\\**$", replace(file("${path.module}/${name}"), "/\"(?:[^\"\\\\\\n]|\\\\.)*\"/", "\"\""))) == 0])
+    error_message = "main.tf et versions.tf ne doivent contenir aucun /* sans */ sur la même ligne : les tests qui relisent ces fichiers prendraient pour du code le contenu d'un commentaire étalé sur plusieurs lignes."
   }
 
   assert {

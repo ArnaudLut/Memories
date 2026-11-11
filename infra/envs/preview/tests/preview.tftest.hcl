@@ -310,13 +310,15 @@ run "environment" {
   }
 
   # Les relectures ci-dessus ne reconnaissent pas un commentaire /* */ : une
-  # ligne protégée qui s'y trouverait passerait pour présente.
+  # ligne protégée qui s'y trouverait passerait pour présente. Tout /* qui
+  # n'est pas refermé sur sa ligne est donc refusé, hors des chaînes entre
+  # guillemets, qui sont d'abord vidées.
   assert {
     condition = alltrue([
       for name in ["environment.tf", "main.tf", "versions.tf", "../../modules/database/main.tf", "../../modules/database/outputs.tf", "../../modules/instance/main.tf"] :
-      length(regexall("(?m)^\\s*/\\*", file("${path.module}/${name}"))) == 0
+      length(regexall("(?m)/\\*(?:[^*\\n]|\\*+[^*/\\n])*\\**$", replace(file("${path.module}/${name}"), "/\"(?:[^\"\\\\\\n]|\\\\.)*\"/", "\"\""))) == 0
     ])
-    error_message = "Les fichiers relus par ces tests ne doivent contenir aucun commentaire ouvert par /* en début de ligne : son contenu serait pris pour du code."
+    error_message = "Les fichiers relus par ces tests ne doivent contenir aucun /* sans */ sur la même ligne : le contenu d'un commentaire étalé sur plusieurs lignes serait pris pour du code."
   }
 
   assert {
