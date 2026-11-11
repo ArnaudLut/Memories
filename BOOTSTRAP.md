@@ -7,8 +7,8 @@ précisément par quoi.
 
 Chaque geste indique pourquoi il reste manuel, ce qu'il faut faire, ce qu'il
 crée et ce qu'il coûte, puis comment vérifier qu'il a réussi. Les exemples
-utilisent la zone `memoire.exemple.fr` et le nom `preview.memoire.exemple.fr` :
-remplacez-les par les vôtres.
+utilisent la zone `memoire.example.com` et le nom
+`preview.memoire.example.com` : remplacez-les par les vôtres.
 
 Aucune de ces opérations n'a pu être essayée sur un vrai compte OVHcloud ni sur
 GitHub avant votre première exécution. La partie « Ce qui reste à vérifier sur
@@ -25,6 +25,7 @@ dans les cas prévus.
 | Workflow « Amorcer la base » | À la demande, au geste 4 | Fait générer par OVHcloud un nouveau mot de passe pour le compte d'administration de la base, puis crée les rôles SQL, les schémas et les extensions. |
 | Workflow « Vérifier l'étape 1 » | À la demande, au geste 5 | Contrôle sur les services réels les rôles SQL, pgvector, le cloisonnement et la sauvegarde de la table témoin, le verrou de l'état, et l'absence de changement en attente. |
 | Workflow « Détecter une dérive » | Chaque lundi, ou à la demande | Planifie la préversion et échoue si le plan propose un changement. |
+| Workflow « Lever le verrou de l'état » | À la demande, après une exécution annulée ou interrompue | Lève le verrou qu'OpenTofu a pu laisser sur l'état de la préversion. |
 | Dependabot | Chaque semaine | Ouvre les pull requests qui font avancer les versions épinglées. |
 
 Restent manuels, dans cet ordre :
@@ -60,17 +61,37 @@ La dépense commence au geste 4, quand le premier déploiement crée l'instance 
 la base. Elle est imputée d'abord au bon d'achat, puis au moyen de paiement du
 compte.
 
-Deux points sont à constater sur la première facture. Le code ne demande pas
+Un bon d'achat a une date de fin de validité. D'après le guide d'OVHcloud, un
+bon n'est en général valable qu'un mois, et les crédits du Startup Program
+douze mois après la signature du contrat. Passé cette date, le solde restant
+n'est plus utilisable et toute la dépense passe au moyen de paiement. Relevez
+cette date au geste 1, puis enchaînez les gestes sans attendre.
+
+Trois points sont à constater sur la première facture. Le code ne demande pas
 d'engagement mensuel pour l'instance : attendez-vous au tarif horaire, soit un
 total de 62,05 € au lieu de 60,17 €. L'adresse IPv4 publique pourrait être
 facturée à part, 1,97 € par mois : la grille ne le dit pas clairement pour cette
-gamme.
+gamme. OVHcloud annonce enfin qu'après décembre 2026 une base sera facturée sur
+trois lignes, calcul, stockage et sauvegardes, au lieu d'une seule : comparez
+leur somme aux 54,46 € du tableau.
 
 Le nom de domaine et une éventuelle offre GitHub payante ne sont pas comptés.
 
 Aucune commande du dépôt ne supprime la base : la CI n'en a pas le droit, et le
-code le refuse. Arrêter la dépense de la préversion demande donc de supprimer
-ses ressources à la main, dans l'espace client.
+code le refuse. Pour arrêter la dépense de la préversion :
+
+1. Désarmez d'abord les workflows, sans quoi le prochain commit de `main`
+   recréerait l'instance et la base :
+   `gh variable set OVH_BOOTSTRAPPED --body false`.
+2. Dans l'espace client, ouvrez le service PostgreSQL `memoire-preview` et
+   désactivez sa protection contre la suppression, puis supprimez ce service
+   et l'instance `memoire-preview`. Les données de la base sont perdues.
+
+Le bucket des états, la zone DNS, le réseau privé et les images peuvent
+rester : ils coûtent moins de 1 € par mois. Pour reprendre, remettez la
+variable à `true`, puis relancez le déploiement comme à l'étape 4.3 : il recrée
+l'instance et une base vide, et s'arrête avec le code 12 tant que la base n'est
+pas de nouveau amorcée, comme à l'étape 4.2.
 
 ## Avant de commencer
 
@@ -84,7 +105,7 @@ Il vous faut :
   fusionner ;
 - un gestionnaire de mots de passe ;
 - un poste sous Linux ou macOS avec `git`, OpenTofu 1.13, `gh` 2.43 ou plus
-  récent, `jq`, `openssl` et `curl` ;
+  récent, `jq`, `openssl`, `curl` et `dig` ;
 - une copie du dépôt sur ce poste, placée sur la branche de la pull request de
   l'étape 1 (`gh pr checkout <numéro>`) tant qu'elle n'est pas fusionnée.
 
@@ -94,7 +115,7 @@ Vérifiez le poste depuis la racine du dépôt :
 tofu version       # OpenTofu v1.13.x
 gh --version       # 2.43 ou plus récent
 gh auth status     # connecté à github.com ; sinon « gh auth login »
-jq --version && openssl version && curl --version
+jq --version && openssl version && curl --version && dig -v
 gh repo view --json nameWithOwner --jq .nameWithOwner
 ```
 
@@ -160,26 +181,36 @@ qu'aucune ressource n'y est créée.
 - Le projet apparaît dans le sélecteur « Projet », en haut du menu de gauche,
   sans bandeau de mode découverte.
 - L'onglet « Crédits et bons d'achat » du « Centre de coûts » affiche le solde
-  du bon et sa date de fin de validité. Les crédits du Startup Program se
-  lisent ailleurs : cliquez sur votre nom en haut à droite, puis sur « Mes
-  moyens de paiement », onglet « Mes bons d'achat ».
+  du bon. Relevez sa date de fin de validité. Si l'onglet ne la montre pas, la
+  console de l'API (`https://api.eu.ovhcloud.com/console/`) la donne :
+  `GET /cloud/project/{serviceName}/credit` liste les crédits du projet, et
+  `GET /cloud/project/{serviceName}/credit/{id}` renvoie la date dans le champ
+  `validity`. Les crédits du Startup Program se lisent ailleurs : cliquez sur
+  votre nom en haut à droite, puis sur « Mes moyens de paiement », onglet « Mes
+  bons d'achat ».
 
 ## Geste 2 : héberger la zone DNS chez OVHcloud
 
 **Pourquoi à la main.** Créer une zone est une commande passée sur le compte,
 et la rendre active demande une modification chez le gestionnaire actuel du
-domaine. Le déploiement ne gère ensuite qu'un enregistrement dans cette zone :
-la CI n'a de droits que sur ses enregistrements.
+domaine. Le déploiement ne gère ensuite qu'un enregistrement dans cette zone.
+La CI reçoit pourtant le droit de créer, de modifier et de supprimer tous les
+enregistrements de la zone, et aucun autre droit sur le domaine : mieux vaut
+lui confier une zone qui ne porte rien d'autre.
 
 **Ce qu'il faut faire.** La zone doit se trouver sur le même compte OVHcloud
 que le projet. Trois cas se présentent.
 
 Le domaine est enregistré chez OVHcloud, sur ce compte, avec les serveurs DNS
-d'OVHcloud : la zone existe déjà. Il n'y a rien à faire.
+d'OVHcloud : la zone existe déjà. Si le domaine ne sert à rien d'autre, il n'y
+a rien à faire. S'il porte déjà un site ou des courriels, créez plutôt une zone
+pour un sous-domaine en suivant les étapes du cas suivant : à l'étape 5, les
+deux enregistrements NS s'ajoutent dans la zone du domaine, par le bouton
+« Ajouter une entrée ».
 
 Le domaine est géré ailleurs et sert déjà à autre chose, un site ou des
 courriels : déléguez seulement un sous-domaine, par exemple
-`memoire.exemple.fr`.
+`memoire.example.com`.
 
 1. Dans l'espace client, ouvrez « Web Cloud », puis « Zones DNS », et cliquez
    sur « Commander ».
@@ -202,7 +233,7 @@ La propagation peut prendre jusqu'à 48 heures.
 Le nom saisi à la commande, ou le domaine lui-même dans le premier cas, est la
 zone que le geste 3 attend dans `--dns-zone`. Choisissez enfin le nom de la
 préversion. Il doit appartenir à la zone, par exemple
-`preview.memoire.exemple.fr`, et ne porter encore aucun enregistrement.
+`preview.memoire.example.com`, et ne porter encore aucun enregistrement.
 
 **Ce que le geste crée et coûte.** Une zone DNS chez OVHcloud, à 0 € d'après le
 catalogue lu le 10 novembre 2026. Le nom de domaine reste facturé par son
@@ -211,8 +242,8 @@ bureau d'enregistrement.
 **Comment vérifier.**
 
 ```sh
-dig +short NS memoire.exemple.fr            # les deux serveurs d'OVHcloud
-dig +short preview.memoire.exemple.fr       # rien pour l'instant
+dig +short NS memoire.example.com            # les deux serveurs d'OVHcloud
+dig +short preview.memoire.example.com       # rien pour l'instant
 ```
 
 ## Geste 3 : créer des identifiants temporaires et lancer `scripts/bootstrap.sh`
@@ -231,16 +262,21 @@ certificat.
 
 Sans clé, l'instance n'accepte que le canal de déploiement. Personne ne peut y
 ouvrir de session, et un dépannage passe par le mode rescue d'OVHcloud. C'est
-le réglage par défaut.
+le réglage par défaut. Dans ce cas, personne ne peut non plus lire les journaux
+du service : seules les 40 dernières lignes de chaque conteneur d'une version
+refusée paraissent dans le journal de l'étape « Mettre la version en service ».
 
-Avec une ou plusieurs clés publiques, l'instance reçoit un compte `admin` qui a
+Avec une ou plusieurs clés publiques, l'instance reçoit un compte `ops` qui a
 tous les droits par `sudo`. La valeur est une liste JSON :
 
 ```sh
 gh variable set ADMIN_SSH_PUBLIC_KEYS --body '["ssh-ed25519 AAAA... prenom@poste"]'
 ```
 
-`scripts/bootstrap.sh` n'écrase jamais une valeur déjà inscrite.
+`scripts/bootstrap.sh` n'écrase jamais une valeur déjà inscrite. Après le
+premier déploiement, vérifiez le compte :
+`ssh ops@preview.memoire.example.com sudo cloud-init status --long` doit
+annoncer `status: done`.
 
 ### 3.2 Créer les identifiants personnels
 
@@ -263,6 +299,9 @@ vie et à leur révocation, à l'étape 3.5.
 
 ### 3.3 Lancer la commande
 
+Ne partagez pas votre écran pendant cette étape : la page des identifiants et
+la phrase de passe s'affichent en clair.
+
 Dans un terminal placé à la racine du dépôt, saisissez les trois valeurs sans
 les écrire dans un fichier ni dans l'historique du terminal. Chaque commande
 attend que vous colliez la valeur puis que vous appuyiez sur Entrée, et
@@ -279,28 +318,29 @@ Puis :
 ```sh
 scripts/bootstrap.sh \
   --project-id <identifiant du projet> \
-  --dns-zone memoire.exemple.fr \
-  --preview-hostname preview.memoire.exemple.fr \
-  --acme-email contact@exemple.fr
+  --dns-zone memoire.example.com \
+  --preview-hostname preview.memoire.example.com \
+  --acme-email contact@example.com
 ```
 
 L'adresse de contact est transmise à l'autorité qui délivre les certificats,
-Let's Encrypt, et inscrite dans une variable du dépôt : une adresse de fonction
-convient mieux qu'une adresse personnelle. Une valeur omise est reprise du
-dépôt s'il la connaît déjà, et demandée au clavier sinon.
+Let's Encrypt et elle seule, et inscrite dans une variable du dépôt : une
+adresse de fonction convient mieux qu'une adresse personnelle. Une valeur omise
+est reprise du dépôt s'il la connaît déjà, et demandée au clavier sinon.
 
 La commande déroule alors ces étapes :
 
-1. Elle affiche « Dépôt GitHub : », suivi du dépôt où elle écrira. Si ce n'est
+1. Elle affiche « Dépôt GitHub : », suivi du dépôt où elle écrira, puis
+   « Projet Public Cloud : », suivi du nom du projet. Si l'un des deux n'est
    pas le bon, interrompez-la : rien n'a encore été créé.
 2. Elle génère la phrase de passe qui chiffre les états OpenTofu et l'affiche
    une seule fois. Enregistrez-la aussitôt dans votre gestionnaire de mots de
    passe, puis appuyez sur Entrée. Sans elle, les états sont illisibles et
    OpenTofu ne peut plus rien modifier ; GitHub en reçoit une copie, qu'il ne
    permet pas de relire.
-3. OpenTofu présente son plan, qui doit se terminer par
-   `Plan: 6 to add, 0 to change, 0 to destroy.`, puis attend à l'invite
-   `Enter a value:`. Répondez `yes`.
+3. OpenTofu présente son plan, qui doit annoncer
+   `Plan: 6 to add, 0 to change, 0 to destroy.`, suivi de la liste des sorties,
+   puis attend à l'invite `Enter a value:`. Répondez `yes`.
 4. Après `Apply complete! Resources: 6 added, 0 changed, 0 destroyed.`, elle
    inscrit les variables puis les secrets dans le dépôt, une ligne par valeur.
 5. Elle range son état, chiffré, dans le bucket, et supprime la copie locale.
@@ -334,11 +374,13 @@ minute et relancez la même commande.
 
 Révoquez l'application `memoire-bootstrap` sur la page « Clés API » de l'espace
 client. À défaut, la console de l'API (`https://api.eu.ovhcloud.com/console/`)
-le fait en deux appels : `GET /me/api/application` donne les identifiants des
-applications, et `DELETE /me/api/application/{applicationId}` révoque celle qui
-a servi.
+le fait en trois appels : `GET /me/api/application` donne les identifiants des
+applications, `GET /me/api/application/{applicationId}` donne le nom de
+chacune, et `DELETE /me/api/application/{applicationId}` révoque celle qui
+s'appelle `memoire-bootstrap`.
 
-Fermez ensuite le terminal, ou retirez les valeurs de son environnement :
+Fermez ensuite le terminal : la phrase de passe y reste affichée. Si vous devez
+le garder ouvert, retirez au moins les valeurs de son environnement :
 
 ```sh
 unset OVH_APPLICATION_KEY OVH_APPLICATION_SECRET OVH_CONSUMER_KEY STATE_PASSPHRASE
@@ -369,8 +411,13 @@ centimes. Le reste est gratuit.
 ```sh
 gh secret list      # les cinq secrets
 gh variable list    # les dix variables, dont OVH_BOOTSTRAPPED à true
-git status --short  # rien : aucun état ne reste sur le poste
+git status --short --ignored infra/bootstrap
 ```
+
+La dernière commande ne doit afficher que `!! infra/bootstrap/.terraform/` :
+aucun état ne reste alors sur le poste. Une ligne qui nomme
+`terraform.tfstate` signale une exécution interrompue, à reprendre comme à
+l'étape 3.4.
 
 Dans l'espace client, le menu de gauche du projet montre le bucket dans la
 section « Stockage », et l'utilisateur dans « Gestion du projet », onglet
@@ -410,7 +457,8 @@ suivez-le dans l'onglet « Actions » du dépôt, ou avec `gh run watch`.
 - Le job « Image » construit l'image et la publie.
 - Le job « Préversion » crée l'infrastructure. L'étape « Appliquer le plan
   enregistré » est longue la première fois : elle attend la création de la
-  base, et le job dispose de deux heures.
+  base, pendant 40 minutes au plus. Ne l'annulez pas : une création interrompue
+  laisse la base à remplacer, ce que décrit la fin de `infra/README.md`.
 - L'étape « Mettre la version en service » échoue ensuite avec le code 12, et
   le résumé du job indique : « La base n'est pas encore amorcée : lancez le
   workflow « Amorcer la base », puis relancez ce déploiement. »
@@ -420,6 +468,9 @@ pas encore.
 
 Si la pull request a été fusionnée avant le geste 3, le workflow n'a rien
 fait : lancez-le à la main, comme à l'étape 4.3.
+
+Tant que le premier déploiement n'a pas abouti, le workflow « Détecter une
+dérive » du lundi échoue : son plan annonce les ressources qui restent à créer.
 
 ### 4.2 Amorcer la base
 
@@ -447,7 +498,7 @@ gh run watch
 
 Cette fois, le résumé du job « Préversion » doit annoncer « Aucun changement :
 l'infrastructure correspond à sa description. », puis « La version <commit>
-répond sur https://preview.memoire.exemple.fr/health. » Cette dernière étape
+répond sur https://preview.memoire.example.com/health. » Cette dernière étape
 attend jusqu'à dix minutes, le temps que le premier certificat soit délivré.
 
 **Ce que le geste crée et coûte.** Dans le projet OVHcloud : un réseau privé et
@@ -459,7 +510,7 @@ la dépense d'environ 60 € HT par mois.
 **Comment vérifier.**
 
 ```sh
-curl --silent https://preview.memoire.exemple.fr/health
+curl --silent https://preview.memoire.example.com/health
 ```
 
 La réponse doit avoir cette forme, avec l'identifiant du dernier commit de
@@ -476,8 +527,29 @@ geste.
 workflow se relance sans risque : OpenTofu reprend là où il s'est arrêté, et
 remettre en service la même version ne change rien.
 
+**N'annulez pas une exécution pendant qu'OpenTofu planifie ou applique.** Il
+tient alors le verrou de l'état. Une exécution annulée, arrêtée au bout des
+deux heures du job ou privée de son runner peut le laisser en place : les
+exécutions suivantes attendent dix minutes, puis échouent avec
+`Error acquiring the state lock`. Vérifiez qu'aucun workflow ne tourne, relevez
+l'identifiant `ID` que donne ce message, puis lancez :
+
+```sh
+gh workflow run state-unlock.yml --ref main -f lock_id=<ID>
+```
+
+Lancez ensuite « Détecter une dérive », qui planifie sans appliquer, et lisez
+son plan avant de relancer le déploiement. Une base que le plan veut remplacer
+se traite comme l'indique la fin de `infra/README.md`. Une ressource que le
+plan veut créer alors que l'espace client la montre déjà, la base ou
+l'enregistrement DNS en particulier, a été créée sans être inscrite dans
+l'état : supprimez-la d'abord dans l'espace client, sans quoi elle serait créée
+une seconde fois, et la base facturée deux fois.
+
 | Étape en échec | Cause probable | Que faire |
 | --- | --- | --- |
+| Une étape d'OpenTofu, message « Error acquiring the state lock » | Une exécution annulée ou interrompue a laissé le verrou de l'état | Voir le paragraphe ci-dessus |
+| « Planifier et passer le garde-fou », message « Resource instance cannot be destroyed » | Une création de la base a échoué en cours de route, et OpenTofu veut la remplacer | Voir la fin de `infra/README.md` |
 | « Appliquer le plan enregistré » | Erreur 403, région ou offre indisponible, délai dépassé | Voir « À vérifier à la première application réelle » dans `infra/README.md` |
 | « Mettre la version en service », code 1 ou 255 | L'instance n'a pas fini son premier démarrage | Relancer le déploiement |
 | « Mettre la version en service », code 11 | L'instance n'a pas pu télécharger l'image | Lire le journal, puis relancer |
@@ -516,7 +588,10 @@ dans le bucket, dont le versionnement garde quelques octets.
 | « Verrou de l'état » | Le bucket refuse une deuxième écriture conditionnelle : deux applications ne peuvent pas modifier l'état en même temps. |
 | « Plan sans changement » | OpenTofu ne propose plus rien : l'infrastructure correspond à sa description. |
 
-La ligne qui précède le tableau donne la version de PostgreSQL.
+La ligne qui précède le tableau donne la version de PostgreSQL. Le journal de
+l'étape « Contrôler la base depuis l'instance » contient le rapport complet :
+les attributs du compte `avnadmin` et de chaque rôle, et le message par lequel
+`pg_dump` refuse une sauvegarde sans `--enable-row-security`.
 
 L'étape 1 est acquise quand ce tableau est entièrement réussi et qu'une
 nouvelle fusion dans `main` se déploie sans geste.
@@ -533,7 +608,19 @@ geste 3, et la phrase de passe dans `STATE_PASSPHRASE`. Elle relit alors son
 S3, puis met à jour les secrets du dépôt. OpenTofu annonce alors
 `Plan: 2 to add, 1 to change, 2 to destroy.` Ne lancez aucun workflow pendant
 ce temps. La commande ne touche ni à la phrase de passe, ni aux mots de passe
-des rôles SQL, ni aux clés SSH.
+des rôles SQL, ni aux clés SSH. Si elle s'arrête après `Apply complete!`,
+relancez `scripts/bootstrap.sh` sans `rotate` : le renouvellement est fait, il
+reste à inscrire les secrets et à ranger l'état. Relancée avec `rotate`, elle
+renouvellerait tout une seconde fois.
+
+**Lire les journaux du service.** Ils restent sur l'instance, dans Docker, à
+raison de cinq fichiers de 10 Mo au plus par conteneur. Avec une clé
+d'administration (étape 3.1) : `ssh ops@preview.memoire.example.com`, puis
+`sudo docker ps` et `sudo docker logs --tail 200 <conteneur>`.
+
+**Revenir à une version précédente.** Annulez le commit fautif avec
+`git revert`, puis fusionnez : le déploiement remet l'ancien code en service.
+Les migrations déjà jouées ne sont pas défaites.
 
 ## Ce qui reste à vérifier sur les services réels
 
@@ -561,32 +648,39 @@ Pendant le geste 3 :
 - la commande sous macOS : elle a été essayée avec bash 3.2, celui de macOS,
   mais sur un poste Linux.
 
-Une clé personnelle aux droits plus étroits devrait suffire, mais n'a pas été
-essayée : `GET`, `POST`, `PUT` et `DELETE` sur `/me/api/oauth2/client*`,
-`/iam/policy*`, `/cloud/project/<identifiant du projet>*` et
+Des identifiants personnels aux droits plus étroits devraient suffire, mais
+n'ont pas été essayés : `GET`, `POST`, `PUT` et `DELETE` sur
+`/me/api/oauth2/client*`, `/iam/policy*`,
+`/cloud/project/<identifiant du projet>*` et
 `/publicCloud/project/<identifiant du projet>/*`, et `GET` sur `/auth/details`
 et `/domain/zone/<zone>`.
 
 Pendant le premier déploiement :
 
-- l'exécution des workflows sur GitHub, qui n'a jamais eu lieu : leurs
-  conditions sur les variables du dépôt, et la première publication de l'image
-  par le jeton du workflow ;
+- l'exécution sur GitHub des workflows qui touchent à OVHcloud, qui n'a jamais
+  eu lieu : seule l'intégration continue y a tourné, sans son job « Plan de la
+  préversion ». Restent à voir leurs conditions une fois `OVH_BOOTSTRAPPED`
+  posée, et la première publication de l'image par le jeton du workflow ;
 - l'authentification d'OpenTofu par le compte de service, et la suffisance des
   35 actions : une erreur 403 nomme l'action manquante ;
 - la disponibilité, dans le projet, de la région `GRA11`, de l'image
   « Ubuntu 24.04 », du gabarit `d2-2`, et de l'offre `essential` en `db1-4`
   pour PostgreSQL 17 sur un réseau privé. Une région manquante s'ajoute dans
-  « Gestion du projet », onglet « Localisations » ;
+  « Gestion du projet », onglet « Localisations ». Le catalogue public
+  proposait encore cette offre le 11 novembre 2026, mais OVHcloud renouvelle sa
+  gamme de bases managées : `infra/README.md` dit quoi changer si elle est
+  refusée ;
 - les durées réelles de création de la base et de l'instance ;
 - le premier démarrage d'une vraie instance : installation de Docker, pare-feu,
-  canal de déploiement prêt en moins de dix minutes ;
+  canal de déploiement prêt en moins de dix minutes, et création du compte
+  `ops` quand des clés d'administration sont fournies ;
 - l'acceptation par OVHcloud des données d'initialisation de l'instance, qui
   pèsent environ 31 ko pour une limite de 65 535 octets, et la règle qui
   interdit aux conteneurs de lire les métadonnées de l'instance ;
 - le téléchargement de l'image par l'instance, avec le jeton du workflow, et
   celui de l'image de Caddy depuis Docker Hub ;
-- la délivrance du certificat par Let's Encrypt, et HTTP/3 sur le port UDP 443 ;
+- la délivrance du certificat par Let's Encrypt, seule autorité que Caddy
+  sollicite, et HTTP/3 sur le port UDP 443 ;
 - la connexion du service à la base par le réseau privé, avec vérification de
   son certificat.
 
@@ -611,7 +705,8 @@ Pendant « Vérifier l'étape 1 » :
 
 À observer ensuite :
 
-- la première facture : tarif de l'instance et facturation de l'adresse IPv4 ;
+- la première facture : tarif de l'instance, facturation de l'adresse IPv4 et
+  lignes de la base ;
 - les mises à jour nocturnes de l'instance, et son redémarrage éventuel à
   3 h 30 UTC ;
 - la mémoire de l'instance, que se partagent trois conteneurs limités à 512,
@@ -620,9 +715,10 @@ Pendant « Vérifier l'étape 1 » :
 - les pull requests de Dependabot. D'après sa documentation, il ne suit dans
   les workflows que les actions : ni l'image du conteneur de service de
   `ci.yml`, ni les images de shellcheck et d'actionlint, ni la version
-  d'OpenTofu. Ces versions se montent à la main. Son traitement de l'image de
-  base du `Dockerfile` et des images des fichiers Compose, écrites comme
-  valeurs par défaut d'une variable, n'a pas pu être vérifié.
+  d'OpenTofu. Ces versions se montent à la main. Il suit l'image de base du
+  `Dockerfile`, écrite pour cela dans une instruction `FROM`, et les images des
+  fichiers Compose. Quand il propose une nouvelle image de base, montez
+  `.node-version` dans la même pull request.
 
 ## Gestes des étapes suivantes
 
