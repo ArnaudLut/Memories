@@ -52,7 +52,7 @@ async function count(client: Client | Pool, sql: string): Promise<number> {
 }
 
 /** (a) Aucun des cinq rôles n'est superutilisateur ni ne contourne la RLS. */
-async function checkRoles(client: Client, admin: string): Promise<Check> {
+export async function checkRoles(client: Client, admin: string): Promise<Check> {
   const { rows: roles } = await client.query<{
     name: string;
     superuser: boolean;
@@ -158,9 +158,16 @@ async function checkRls(
       );
     }
     const refused = await dumpWitness(database, backup, { rowSecurity: false });
-    const dumpWithoutRowSecurityRefused = refused.exitCode !== 0;
-    if (!dumpWithoutRowSecurityRefused) {
+    // Le refus attendu nomme la table. Un autre échec, une connexion perdue
+    // par exemple, ne prouve rien.
+    const dumpWithoutRowSecurityRefused =
+      refused.exitCode !== 0 && refused.stderr.includes("rls_witness");
+    if (refused.exitCode === 0) {
       problems.push("pg_dump réussit sans --enable-row-security");
+    } else if (!dumpWithoutRowSecurityRefused) {
+      problems.push(
+        `pg_dump sans --enable-row-security a échoué pour une autre raison que la RLS (code ${refused.exitCode} : ${refused.stderr.trim()})`,
+      );
     }
 
     return verdict(
@@ -183,7 +190,7 @@ async function checkRls(
 }
 
 /** (d) Le schéma de la file existe et appartient au rôle du worker. */
-async function checkQueue(client: Client): Promise<Check> {
+export async function checkQueue(client: Client): Promise<Check> {
   const { rows } = await client.query<{ owner: string }>(
     "select pg_catalog.pg_get_userbyid(nspowner) as owner from pg_catalog.pg_namespace where nspname = 'pgboss'",
   );

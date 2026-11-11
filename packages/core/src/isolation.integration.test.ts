@@ -102,6 +102,18 @@ describe("isolation des tenants sous le rôle app", () => {
     expect(await notes(tenantA)).toEqual(["ligne de A"]);
   });
 
+  it("échoue quand le traitement a ignoré l'échec d'une requête", async () => {
+    const ignored = withTenant(app, tenantA, async (client) => {
+      await client.query("insert into app.rls_witness (tenant_id, note) values ($1, 'perdue')", [
+        tenantA,
+      ]);
+      await client.query("select 1 / 0").catch(() => {});
+      return "terminé";
+    });
+    await expect(ignored).rejects.toThrow(/annulée par PostgreSQL/);
+    expect(await notes(tenantA)).toEqual(["ligne de A"]);
+  });
+
   it("survit à une connexion perdue en cours de transaction", async () => {
     const lost = withTenant(app, tenantA, (client) =>
       client.query("select pg_terminate_backend(pg_backend_pid())"),
@@ -127,6 +139,20 @@ describe("autres rôles", () => {
         tenantA,
       ]),
     ).rejects.toMatchObject({ code: INSUFFICIENT_PRIVILEGE });
+  });
+
+  it("le propriétaire des tables ne voit aucune ligne, même avec le contexte d'un tenant", async () => {
+    // La politique des tenants ne vaut que pour le rôle app.
+    const migrator = await connect(db.config.database, db.credentials("migrator"));
+    try {
+      await migrator.query("begin");
+      await migrator.query("select set_config('app.tenant_id', $1, true)", [tenantA]);
+      const { rows } = await migrator.query("select count(*)::int as n from app.rls_witness");
+      expect(rows).toEqual([{ n: 0 }]);
+    } finally {
+      await migrator.query("rollback");
+      await migrator.end();
+    }
   });
 
   it("backup lit les lignes de tous les tenants, sans pouvoir écrire", async () => {
@@ -166,23 +192,31 @@ describe("autres rôles", () => {
 });
 
 describe("règle pour toutes les tables du schéma app", () => {
-  it("chaque table a la RLS activée et forcée, avec au moins une politique", async () => {
+  it("chaque table a la RLS activée et forcée, une politique pour app et la lecture pour backup", async () => {
+    // Sans politique de lecture pour backup, pg_dump réussit et sauvegarde une
+    // table vide : cet oubli ne se verrait qu'à la restauration.
     const tables = await db.query<{
       name: string;
       enabled: boolean;
       forced: boolean;
-      policies: number;
+      tenantPolicy: boolean;
+      backupReads: boolean;
     }>(
       "migrator",
       `select c.relname as name, c.relrowsecurity as enabled, c.relforcerowsecurity as forced,
-              (select count(*)::int from pg_catalog.pg_policy p where p.polrelid = c.oid) as policies
+              exists (select from pg_catalog.pg_policy p
+                      where p.polrelid = c.oid and 'app'::regrole = any (p.polroles)) as "tenantPolicy",
+              exists (select from pg_catalog.pg_policy p
+                      where p.polrelid = c.oid and p.polpermissive and p.polcmd in ('r', '*')
+                        and 'backup'::regrole = any (p.polroles)
+                        and pg_catalog.pg_get_expr(p.polqual, p.polrelid) = 'true') as "backupReads"
        from pg_catalog.pg_class c
        where c.relnamespace = 'app'::regnamespace and c.relkind in ('r', 'p')
        order by c.relname`,
     );
     expect(tables.map((table) => table.name)).toContain("rls_witness");
     const unprotected = tables.filter(
-      (table) => !table.enabled || !table.forced || table.policies < 1,
+      (table) => !table.enabled || !table.forced || !table.tenantPolicy || !table.backupReads,
     );
     expect(unprotected).toEqual([]);
   });
@@ -193,7 +227,9 @@ describe("règle pour toutes les tables du schéma app", () => {
     const migrator = await connect(db.config.database, db.credentials("migrator"));
     try {
       await migrator.query("begin");
-      await migrator.query("create table app.future_table (id uuid primary key)");
+      await migrator.query(
+        "create table app.future_table (id bigint generated always as identity primary key)",
+      );
       const { rows } = await migrator.query(
         `select grantee::text, array_agg(privilege_type::text order by privilege_type) as privileges
          from information_schema.role_table_grants
@@ -204,6 +240,13 @@ describe("règle pour toutes les tables du schéma app", () => {
         { grantee: "app", privileges: ["DELETE", "INSERT", "SELECT", "UPDATE"] },
         { grantee: "backup", privileges: ["SELECT"] },
       ]);
+      // La séquence de la colonne suit la table : sans ces droits, app
+      // n'insère pas dans une colonne serial et pg_dump échoue sous backup.
+      const sequence = await migrator.query(
+        `select has_sequence_privilege('app', 'app.future_table_id_seq', 'USAGE') as "appDraws",
+                has_sequence_privilege('backup', 'app.future_table_id_seq', 'SELECT') as "backupReads"`,
+      );
+      expect(sequence.rows).toEqual([{ appDraws: true, backupReads: true }]);
     } finally {
       await migrator.query("rollback");
       await migrator.end();

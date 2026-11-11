@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -197,6 +197,24 @@ describe("amorçage sous un compte d'administration qui n'est pas superutilisate
     ).toEqual([{ usage: true }]);
 
     await db.bootstrap();
+    expect(await snapshot()).toEqual(afterFirstRun);
+  });
+
+  it("refuse un rôle qui a reçu un attribut privilégié", async () => {
+    // ALTER ROLE est transactionnel : l'attribut disparaît avec la transaction,
+    // et rien ne reste sur le serveur si le test est interrompu.
+    const checks = readFileSync(join(BOOTSTRAP_DIRECTORY, "90_checks.sql"), "utf8");
+    const admin = await connect(db.config.database, db.credentials("admin"));
+    try {
+      await admin.query("begin");
+      await admin.query("alter role backup createdb");
+      await expect(admin.query(checks)).rejects.toThrow(
+        /^amorçage incomplet : le rôle backup a un attribut inattendu$/,
+      );
+    } finally {
+      await admin.query("rollback");
+      await admin.end();
+    }
     expect(await snapshot()).toEqual(afterFirstRun);
   });
 

@@ -105,7 +105,12 @@ describe("verify sur une base défaillante", () => {
     const { code, output } = await run("verify", { ...db.env, DB_BACKUP_PASSWORD: "erroné" });
     const report = JSON.parse(output) as VerifyReport;
     expect(code).toBe(EXIT_FAILED);
-    expect(report.checks.rls).toMatchObject({ status: "failed", dumpContainsBothRows: false });
+    // Un échec de connexion n'est pas le refus attendu de la RLS.
+    expect(report.checks.rls).toMatchObject({
+      status: "failed",
+      dumpContainsBothRows: false,
+      dumpWithoutRowSecurityRefused: false,
+    });
   });
 });
 

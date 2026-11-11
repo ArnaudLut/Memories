@@ -112,6 +112,22 @@ describe("migrations", () => {
     );
     expect(await journal()).toEqual([...versions, "9997"]);
   });
+
+  it.each(["commit;", "commit; begin;"])(
+    "nomment le « %s » d'un fichier dont une requête échoue ensuite",
+    async (statements) => {
+      const directory = copyOfMigrations();
+      writeFileSync(join(directory, "9997_ahead.sql"), "select 1;\n");
+      writeFileSync(
+        join(directory, "9999_commits.sql"),
+        `select 1;\n${statements}\nselect 1 / 0;\n`,
+      );
+      await expect(db.migrate(directory)).rejects.toThrow(
+        /^La migration 9999_commits a échoué : division by zero ; le fichier a terminé sa transaction/,
+      );
+      expect(await journal()).toEqual([...versions, "9997"]);
+    },
+  );
 });
 
 describe("base non amorcée", () => {
@@ -123,6 +139,15 @@ describe("base non amorcée", () => {
       logger: memoryLogger(),
     });
     await expect(run).rejects.toThrow(NotBootstrappedError);
+  });
+
+  it("est reconnue quand le rôle migrator n'a pas le droit de se connecter", async () => {
+    await db.query("admin", "alter role migrator nologin");
+    try {
+      await expect(db.migrate()).rejects.toThrow(NotBootstrappedError);
+    } finally {
+      await db.query("admin", "alter role migrator login");
+    }
   });
 
   it("est reconnue quand le schéma meta manque", async () => {

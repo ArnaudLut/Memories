@@ -24,6 +24,12 @@ describe("connectionOptions", () => {
       rejectUnauthorized: true,
     });
   });
+
+  it("borne à trois secondes l'ouverture d'une connexion", () => {
+    expect(connectionOptions(database, credentials)).toMatchObject({
+      connectionTimeoutMillis: 3000,
+    });
+  });
 });
 
 describe("withTenant", () => {

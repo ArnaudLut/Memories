@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -76,6 +76,38 @@ describe("worker sous le rôle queue", () => {
       },
       { timeout: 15_000, interval: 100 },
     );
+  });
+
+  it("journalise une erreur de fond de pg-boss au lieu de s'arrêter", () => {
+    expect(() => worker?.boss.emit("error", new Error("base injoignable"))).not.toThrow();
+    expect(logger.entries).toContainEqual({
+      level: "error",
+      event: "queue.error",
+      context: { error: { name: "Error", message: "base injoignable" } },
+    });
+  });
+
+  it("ne donne plus signe de vie quand la base ne répond plus", async () => {
+    const lastSign = statSync(livenessFile).mtimeMs;
+    const queueDb = worker?.boss.getDb();
+    if (queueDb === undefined) {
+      throw new Error("le worker n'a pas démarré");
+    }
+    const cut = vi.spyOn(queueDb, "executeSql").mockRejectedValue(new Error("base coupée"));
+    try {
+      // Le contrôle suivant arrive dans les dix secondes.
+      await vi.waitFor(
+        () => {
+          expect(logger.entries.map((entry) => entry.event)).toContain(
+            "worker.liveness_check_failed",
+          );
+        },
+        { timeout: 15_000, interval: 100 },
+      );
+      expect(statSync(livenessFile).mtimeMs).toBe(lastSign);
+    } finally {
+      cut.mockRestore();
+    }
   });
 
   it("s'arrête proprement, puis redémarre sur le schéma déjà installé", async () => {

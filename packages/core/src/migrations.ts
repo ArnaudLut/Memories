@@ -31,6 +31,8 @@ const ADVISORY_LOCK_KEY = 0x6d656d6f;
 // Mot de passe refusé ou rôle inconnu, puis rôle sans droit de connexion.
 const AUTHENTICATION_FAILURES = new Set(["28P01", "28000"]);
 const UNDEFINED_SCHEMA = "3F000";
+const ENDED_TRANSACTION =
+  "le fichier a terminé sa transaction (BEGIN, COMMIT et ROLLBACK y sont interdits) : ce qu'il a validé reste appliqué sans figurer au journal";
 
 function sqlState(error: unknown): string | undefined {
   return error instanceof Error && "code" in error && typeof error.code === "string"
@@ -99,17 +101,29 @@ async function transactionId(client: Client): Promise<string> {
   return rows[0]?.id ?? "";
 }
 
+/** Vrai quand la transaction a été validée : un COMMIT du fichier l'a terminée. */
+async function wasCommitted(client: Client, id: string): Promise<boolean> {
+  try {
+    const { rows } = await client.query<{ committed: boolean }>(
+      "select pg_xact_status($1::xid8) = 'committed' as committed",
+      [id],
+    );
+    return rows[0]?.committed ?? false;
+  } catch {
+    return false;
+  }
+}
+
 async function applyMigration(client: Client, file: MigrationFile): Promise<void> {
   await client.query("begin");
+  let before = "";
   try {
-    const before = await transactionId(client);
+    before = await transactionId(client);
     await client.query(file.sql);
     // Un COMMIT glissé dans le fichier laisserait la migration à moitié
     // appliquée en cas d'échec : il se voit au changement de transaction.
     if ((await transactionId(client)) !== before) {
-      throw new Error(
-        "le fichier a terminé sa transaction (BEGIN, COMMIT et ROLLBACK y sont interdits)",
-      );
+      throw new Error(ENDED_TRANSACTION);
     }
     await client.query(
       "insert into meta.schema_migrations (version, name, checksum) values ($1, $2, $3)",
@@ -118,7 +132,12 @@ async function applyMigration(client: Client, file: MigrationFile): Promise<void
     await client.query("commit");
   } catch (error) {
     await client.query("rollback").catch(() => {});
-    const reason = error instanceof Error ? error.message : String(error);
+    let reason = error instanceof Error ? error.message : String(error);
+    // Un échec qui suit un COMMIT du fichier ne peut plus rien annuler : le
+    // message le dit, en plus de l'erreur de la requête fautive.
+    if (reason !== ENDED_TRANSACTION && before !== "" && (await wasCommitted(client, before))) {
+      reason += ` ; ${ENDED_TRANSACTION}`;
+    }
     throw new Error(`La migration ${file.version}_${file.name} a échoué : ${reason}`, {
       cause: error,
     });

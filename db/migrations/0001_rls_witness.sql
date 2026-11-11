@@ -29,6 +29,12 @@ alter default privileges in schema app
   grant select, insert, update, delete on tables to app;
 alter default privileges in schema app
   grant select on tables to backup;
+-- Les séquences des colonnes serial et identity suivent leurs tables : app en
+-- tire des valeurs, backup en lit l'état pour pg_dump.
+alter default privileges in schema app
+  grant usage on sequences to app;
+alter default privileges in schema app
+  grant select on sequences to backup;
 
 create table app.rls_witness (
   id uuid primary key default gen_random_uuid(),

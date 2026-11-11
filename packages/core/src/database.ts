@@ -67,7 +67,14 @@ export async function withTenant<T>(
     await client.query("begin");
     await client.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
     const result = await fn(client);
-    await client.query("commit");
+    // PostgreSQL répond ROLLBACK, sans erreur, au COMMIT d'une transaction où
+    // une requête a échoué : un échec que fn aurait ignoré est signalé ici.
+    const { command } = await client.query("commit");
+    if (command !== "COMMIT") {
+      throw new Error(
+        "La transaction du tenant a été annulée par PostgreSQL : une requête y avait échoué.",
+      );
+    }
     return result;
   } catch (error) {
     await client.query("rollback").catch(() => {
