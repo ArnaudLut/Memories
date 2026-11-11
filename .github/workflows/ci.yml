@@ -1,0 +1,179 @@
+# Intégration continue : tout ce qui se vérifie sans compte OVHcloud, sur chaque
+# pull request et chaque commit de main. Le plan de la préversion ne s'ajoute
+# qu'une fois le dépôt amorcé (BOOTSTRAP.md).
+name: Intégration continue
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Nommer bash active « pipefail » : une étape échoue dès qu'un maillon d'un
+    # tube échoue.
+    shell: bash
+
+jobs:
+  app:
+    name: Application
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        # Même image que dev/compose.yaml : l'étape « Comparer l'image de la
+        # base » échoue si les deux divergent.
+        image: pgvector/pgvector:0.8.7-pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --host 127.0.0.1 --username postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Installer Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Installer les dépendances
+        # corepack fournit la version de pnpm que fixe package.json.
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Contrôler le style du code
+        run: pnpm lint
+      - name: Contrôler les types
+        run: pnpm typecheck
+      - name: Lancer les tests unitaires
+        run: pnpm test
+      - name: Comparer l'image de la base
+        run: |
+          image=$(docker compose --file dev/compose.yaml config --images)
+          if ! grep --quiet --fixed-strings "image: $image" .github/workflows/ci.yml; then
+            echo "::error::dev/compose.yaml utilise l'image $image, pas ce workflow : alignez .github/workflows/ci.yml."
+            exit 1
+          fi
+      - name: Préparer la base comme en local
+        # Mots de passe de la base locale, les mêmes que dans dev/compose.yaml :
+        # ils ne protègent rien.
+        env:
+          PGPASSWORD: postgres
+          DB_ADMIN_PASSWORD: avnadmin
+        run: psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres -f dev/init.sql
+      - name: Lancer les tests d'intégration
+        # Le pg_dump du runner est en version 16 : scripts/ci/pg17 fournit celui
+        # de l'image de la base.
+        run: PATH="$GITHUB_WORKSPACE/scripts/ci/pg17:$PATH" pnpm test:integration
+
+  image:
+    name: Image
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Construire l'image sans la publier
+        run: docker build --build-arg APP_VERSION="$GITHUB_SHA" --tag memoire:ci .
+
+  infra:
+    name: Infrastructure
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Installer OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+      - name: Contrôler la mise en forme
+        run: tofu fmt -check -recursive infra
+      - name: Valider et tester chaque racine
+        # Sans backend : ni identifiant ni phrase de passe ne sont nécessaires.
+        run: |
+          for root in infra/bootstrap infra/envs/preview infra/envs/production; do
+            echo "::group::$root"
+            tofu -chdir="$root" init -backend=false -input=false -lockfile=readonly
+            tofu -chdir="$root" validate
+            tofu -chdir="$root" test
+            echo "::endgroup::"
+          done
+      - name: Tester le garde-fou des plans
+        run: python3 -m unittest discover -s infra/policy/tests
+
+  scripts:
+    name: Scripts et workflows
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Contrôler les scripts avec shellcheck
+        run: |
+          docker run --rm --volume "$PWD:/mnt:ro" --workdir /mnt \
+            koalaman/shellcheck:v0.10.0@sha256:2097951f02e735b613f4a34de20c40f937a6c8f18ecb170612c88c34517221fb \
+            scripts/bootstrap.sh scripts/ci/*.sh scripts/ci/pg17/pg_dump \
+            deploy/host/memoire-deploy deploy/release/deploy.sh
+      - name: Contrôler les workflows avec actionlint
+        run: |
+          docker run --rm --volume "$PWD:/repo:ro" --workdir /repo \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+
+  plan:
+    name: Plan de la préversion
+    # Le plan demande les secrets du dépôt : il ne tourne qu'après l'amorçage,
+    # pour une branche du dépôt lui-même, et jamais pour Dependabot, qui ne les
+    # reçoit pas.
+    if: >-
+      github.event_name == 'pull_request'
+      && vars.OVH_BOOTSTRAPPED == 'true'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    env:
+      TF_IN_AUTOMATION: "true"
+      OVH_ENDPOINT: ${{ vars.OVH_ENDPOINT }}
+      OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+      OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.STATE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_S3_SECRET_KEY }}
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      STATE_REGION: ${{ vars.STATE_REGION }}
+      STATE_ENDPOINT: ${{ vars.STATE_ENDPOINT }}
+      TF_VAR_state_passphrase: ${{ secrets.STATE_PASSPHRASE }}
+      TF_VAR_project_id: ${{ vars.OVH_PROJECT_ID }}
+      TF_VAR_dns_zone: ${{ vars.DNS_ZONE }}
+      TF_VAR_hostname: ${{ vars.PREVIEW_HOSTNAME }}
+      TF_VAR_acme_email: ${{ vars.ACME_EMAIL }}
+      TF_VAR_admin_ssh_public_keys: ${{ vars.ADMIN_SSH_PUBLIC_KEYS || '[]' }}
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Installer OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+      - name: Initialiser OpenTofu
+        run: scripts/ci/tofu-init.sh infra/envs/preview
+      - name: Planifier et passer le garde-fou
+        # Le résultat s'affiche dans le résumé du job. « exec » : le script
+        # devient le processus de l'étape et reçoit lui-même l'annulation du
+        # job, qu'il transmet à OpenTofu.
+        run: exec scripts/ci/plan.sh infra/envs/preview

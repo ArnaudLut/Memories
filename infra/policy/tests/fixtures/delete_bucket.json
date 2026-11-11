@@ -1,0 +1,78 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.13.9",
+  "resource_changes": [
+    {
+      "address": "ovh_cloud_storage_object_bucket.state",
+      "mode": "managed",
+      "type": "ovh_cloud_storage_object_bucket",
+      "name": "state",
+      "provider_name": "registry.opentofu.org/ovh/ovh",
+      "change": {
+        "actions": [
+          "delete"
+        ]
+      },
+      "action_reason": "delete_because_no_resource_config"
+    },
+    {
+      "address": "module.database.ovh_cloud_project_database.this",
+      "module_address": "module.database",
+      "mode": "managed",
+      "type": "ovh_cloud_project_database",
+      "name": "this",
+      "provider_name": "registry.opentofu.org/ovh/ovh",
+      "change": {
+        "actions": [
+          "no-op"
+        ]
+      }
+    },
+    {
+      "address": "module.database.ovh_cloud_project_database_database.this",
+      "module_address": "module.database",
+      "mode": "managed",
+      "type": "ovh_cloud_project_database_database",
+      "name": "this",
+      "provider_name": "registry.opentofu.org/ovh/ovh",
+      "change": {
+        "actions": [
+          "no-op"
+        ]
+      }
+    },
+    {
+      "address": "module.dns.ovh_domain_zone_record.this",
+      "module_address": "module.dns",
+      "mode": "managed",
+      "type": "ovh_domain_zone_record",
+      "name": "this",
+      "provider_name": "registry.opentofu.org/ovh/ovh",
+      "change": {
+        "actions": [
+          "no-op"
+        ]
+      }
+    },
+    {
+      "address": "module.instance.ovh_cloud_instance.this",
+      "module_address": "module.instance",
+      "mode": "managed",
+      "type": "ovh_cloud_instance",
+      "name": "this",
+      "provider_name": "registry.opentofu.org/ovh/ovh",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "user_data": "I2Nsb3VkLWNvbmZpZwojIHYxCg=="
+        },
+        "after": {
+          "user_data": "I2Nsb3VkLWNvbmZpZwojIHYxCg=="
+        },
+        "after_unknown": {}
+      }
+    }
+  ]
+}

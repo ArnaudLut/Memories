@@ -1,0 +1,135 @@
+# Déploiement de la préversion : chaque commit de main est construit, publié,
+# puis mis en service. Tant que le dépôt n'est pas amorcé (BOOTSTRAP.md), ce
+# workflow ne fait rien.
+name: Déployer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Un seul déploiement de la préversion à la fois. Celui qui est en cours va
+# toujours à son terme ; s'il en attend plusieurs, seul le plus récent est gardé.
+concurrency:
+  group: deploy-preview
+  cancel-in-progress: false
+
+# Chaque job déclare les droits dont il a besoin.
+permissions: {}
+
+defaults:
+  run:
+    # Nommer bash active « pipefail » : une étape échoue dès qu'un maillon d'un
+    # tube échoue.
+    shell: bash
+
+env:
+  # Même valeur que la variable image_repository de infra/envs : l'instance ne
+  # lance que les images de ce dépôt.
+  IMAGE_REPOSITORY: ghcr.io/arnaudlut/memories
+
+jobs:
+  image:
+    name: Image
+    if: vars.OVH_BOOTSTRAPPED == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Se connecter au registre d'images
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: docker login ghcr.io --username "$REGISTRY_USER" --password-stdin <<< "$REGISTRY_TOKEN"
+      - name: Construire l'image
+        run: docker build --build-arg APP_VERSION="$GITHUB_SHA" --tag "$IMAGE_REPOSITORY:$GITHUB_SHA" .
+      - name: Publier l'image et relever son empreinte
+        id: publish
+        run: |
+          docker push --quiet "$IMAGE_REPOSITORY:$GITHUB_SHA"
+          digest=$(scripts/ci/image-digest.sh "$IMAGE_REPOSITORY:$GITHUB_SHA")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Image publiée : \`$IMAGE_REPOSITORY@$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  preview:
+    name: Préversion
+    needs: image
+    runs-on: ubuntu-24.04
+    # La première application crée la base managée, ce qui prend du temps.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TF_IN_AUTOMATION: "true"
+      OVH_ENDPOINT: ${{ vars.OVH_ENDPOINT }}
+      OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+      OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.STATE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_S3_SECRET_KEY }}
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      STATE_REGION: ${{ vars.STATE_REGION }}
+      STATE_ENDPOINT: ${{ vars.STATE_ENDPOINT }}
+      TF_VAR_state_passphrase: ${{ secrets.STATE_PASSPHRASE }}
+      TF_VAR_project_id: ${{ vars.OVH_PROJECT_ID }}
+      TF_VAR_dns_zone: ${{ vars.DNS_ZONE }}
+      TF_VAR_hostname: ${{ vars.PREVIEW_HOSTNAME }}
+      TF_VAR_acme_email: ${{ vars.ACME_EMAIL }}
+      TF_VAR_admin_ssh_public_keys: ${{ vars.ADMIN_SSH_PUBLIC_KEYS || '[]' }}
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Installer OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+      - name: Initialiser OpenTofu
+        run: scripts/ci/tofu-init.sh infra/envs/preview
+      - name: Planifier et passer le garde-fou
+        id: plan
+        # « exec » : le script devient le processus de l'étape et reçoit
+        # lui-même l'annulation du job, qu'il transmet à OpenTofu.
+        run: exec scripts/ci/plan.sh infra/envs/preview
+      - name: Appliquer le plan enregistré
+        if: steps.plan.outputs.changes == 'true'
+        # « exec » : OpenTofu devient le processus de l'étape et reçoit lui-même
+        # l'annulation du job. Il enregistre alors l'état et relâche le verrou.
+        run: exec tofu -chdir=infra/envs/preview apply -input=false -lock-timeout=10m plan.tfplan
+      - name: Préparer le canal de déploiement
+        # Les sorties sensibles sont masquées, puis écrites dans des fichiers
+        # que le runner supprime à la fin du job.
+        env:
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+        run: |
+          tofu -chdir=infra/envs/preview output -json \
+            | scripts/ci/prepare-remote.sh preview "$RUNNER_TEMP/remote"
+      - name: Mettre la version en service
+        env:
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Une instance neuve met plusieurs minutes à ouvrir son port SSH.
+          REMOTE_WAIT_SECONDS: "600"
+        run: |
+          status=0
+          scripts/ci/remote.sh deploy || status=$?
+          if ((status == 12)); then
+            echo "La base n'est pas encore amorcée : lancez le workflow « Amorcer la base », puis relancez ce déploiement." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+      - name: Vérifier la version en ligne
+        env:
+          PREVIEW_HOSTNAME: ${{ vars.PREVIEW_HOSTNAME }}
+        run: |
+          scripts/ci/wait-healthy.sh "https://$PREVIEW_HOSTNAME/health" "$GITHUB_SHA" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,128 @@
+# Pile de Mémoire sur l'instance. Ce fichier est livré dans l'image, sous
+# /opt/deploy, et n'est lancé que par deploy.sh, qui fournit toutes les
+# variables. MEMOIRE_HTTP_PORT et MEMOIRE_HTTPS_PORT ne servent qu'aux tests.
+#
+# Lors d'un retour arrière, ce fichier est relancé par le deploy.sh de la
+# version qui vient d'échouer, pas par le sien. Toute variable ajoutée ici doit
+# donc rester facultative, sous la forme ${VARIABLE:-}.
+
+name: memoire
+
+# Réglages communs aux conteneurs de l'application : système de fichiers en
+# lecture seule, aucune capacité, aucun gain de privilège.
+x-app: &app
+  image: ${IMAGE:?}
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges=true
+  labels:
+    # Empreinte de l'autorité de la base, calculée par deploy.sh : quand
+    # db-ca.pem change, Compose recrée les conteneurs, qui montent alors le
+    # nouveau fichier.
+    memoire.db-ca-sha256: ${DB_CA_SHA256:-}
+  env_file:
+    # Le format « raw » transmet chaque valeur telle quelle : Compose n'y
+    # interprète ni guillemet, ni dollar, ni croisillon.
+    - path: ${APP_ENV_FILE:?}
+      format: raw
+  volumes:
+    - type: bind
+      source: ${DB_CA_FILE:?}
+      target: /etc/memoire/db-ca.pem
+      read_only: true
+      bind:
+        create_host_path: false
+
+services:
+  caddy:
+    # L'étiquette sert à la lecture, l'empreinte fait foi.
+    image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${MEMOIRE_HTTP_PORT:-80}:80/tcp"
+      - "${MEMOIRE_HTTPS_PORT:-443}:443/tcp"
+      - "${MEMOIRE_HTTPS_PORT:-443}:443/udp"
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?}
+      ACME_EMAIL: ${ACME_EMAIL:?}
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      # Certificats et clés du compte ACME : ils survivent aux déploiements.
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges=true
+    mem_limit: 128m
+    healthcheck:
+      # Une simple ouverture de connexion : elle ne laisse aucune ligne dans les
+      # journaux de Caddy.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "443"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 1s
+
+  server:
+    <<: *app
+    command: ["node", "apps/server/dist/main.js"]
+    restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      # Node interroge /health lui-même : l'image n'a pas à embarquer curl.
+      test:
+        - CMD
+        - node
+        - --eval
+        - 'fetch("http://127.0.0.1:8080/health").then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+
+  worker:
+    <<: *app
+    command: ["node", "apps/worker/dist/main.js"]
+    restart: unless-stopped
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "node", "apps/worker/dist/healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+
+  # Conteneur ponctuel des jobs migrate, db-bootstrap et verify. Son profil
+  # l'écarte de « up » : seul « docker compose run » le lance.
+  job:
+    <<: *app
+    profiles:
+      - job
+    env_file:
+      - path: ${APP_ENV_FILE:?}
+        format: raw
+      - path: ${JOB_ENV_FILE:-/dev/null}
+        format: raw
+    mem_limit: 384m
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,35 @@
+# Base locale pour le développement et les tests d'intégration : PostgreSQL 17
+# avec pgvector, et un compte d'administration qui imite l'avnadmin d'OVHcloud
+# (voir init.sql). Les mots de passe ci-dessous ne protègent rien : la base
+# n'écoute que sur la machine locale et ne contient aucune donnée réelle.
+#
+#   docker compose -f dev/compose.yaml up -d --wait
+#   docker compose -f dev/compose.yaml down --volumes    # repartir de zéro
+
+name: memoire-dev
+
+services:
+  postgres:
+    # L'étiquette sert à la lecture, l'empreinte fait foi. MEMOIRE_PG_IMAGE
+    # permet de tirer la même image depuis un miroir.
+    image: ${MEMOIRE_PG_IMAGE:-pgvector/pgvector:0.8.7-pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8}
+    environment:
+      # Superutilisateur local : il joue le rôle de la plateforme et ne sert
+      # qu'à init.sql.
+      POSTGRES_PASSWORD: postgres
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD:-avnadmin}
+    ports:
+      - "127.0.0.1:${MEMOIRE_PG_PORT:-5432}:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # En TCP : pendant l'initialisation, le serveur provisoire n'écoute que
+      # sur son socket Unix, et la base ne doit pas paraître prête trop tôt.
+      test: ["CMD", "pg_isready", "--host", "127.0.0.1", "--username", "avnadmin", "--dbname", "memoire"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres_data:

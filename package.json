@@ -1,0 +1,24 @@
+{
+  "name": "memoire",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.9+sha512.f49b5a8ea0fdedb44bb3c0c1d6575092a53c2950d95b7ad15df11f17974877a2de3a01c07e934e9b28ce716e51c09a94962c7306d09be2e1e4b18a8c8762fd32",
+  "engines": {
+    "node": ">=24.11"
+  },
+  "scripts": {
+    "build": "pnpm --recursive run build",
+    "lint": "biome check",
+    "format": "biome check --write",
+    "typecheck": "tsc --project tsconfig.json",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.6",
+    "vitest": "5.1.0"
+  }
+}

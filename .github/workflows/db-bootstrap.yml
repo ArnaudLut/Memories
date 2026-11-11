@@ -1,0 +1,87 @@
+# Amorçage de la base de la préversion : crée les rôles SQL, les schémas et les
+# extensions avec le compte d'administration de la base managée. À lancer une
+# fois après le premier déploiement, puis chaque fois que db/bootstrap ou les
+# mots de passe des rôles changent (BOOTSTRAP.md).
+name: Amorcer la base
+
+on:
+  workflow_dispatch:
+
+# Deux amorçages simultanés se disputeraient le mot de passe d'administration.
+concurrency:
+  group: db-bootstrap-preview
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+defaults:
+  run:
+    # Nommer bash active « pipefail » : une étape échoue dès qu'un maillon d'un
+    # tube échoue.
+    shell: bash
+
+env:
+  # Même valeur que la variable image_repository de infra/envs.
+  IMAGE_REPOSITORY: ghcr.io/arnaudlut/memories
+
+jobs:
+  db-bootstrap:
+    name: Amorçage de la base de la préversion
+    if: vars.OVH_BOOTSTRAPPED == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      TF_IN_AUTOMATION: "true"
+      OVH_ENDPOINT: ${{ vars.OVH_ENDPOINT }}
+      OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+      OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.STATE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_S3_SECRET_KEY }}
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      STATE_REGION: ${{ vars.STATE_REGION }}
+      STATE_ENDPOINT: ${{ vars.STATE_ENDPOINT }}
+      TF_VAR_state_passphrase: ${{ secrets.STATE_PASSPHRASE }}
+      TF_VAR_project_id: ${{ vars.OVH_PROJECT_ID }}
+      TF_VAR_dns_zone: ${{ vars.DNS_ZONE }}
+      TF_VAR_hostname: ${{ vars.PREVIEW_HOSTNAME }}
+      TF_VAR_acme_email: ${{ vars.ACME_EMAIL }}
+      TF_VAR_admin_ssh_public_keys: ${{ vars.ADMIN_SSH_PUBLIC_KEYS || '[]' }}
+      REGISTRY_USER: ${{ github.actor }}
+      REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Installer OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+      - name: Retrouver l'image de ce commit
+        # Le job tourne dans l'image que le workflow « Déployer » a publiée.
+        run: |
+          docker login ghcr.io --username "$REGISTRY_USER" --password-stdin <<< "$REGISTRY_TOKEN"
+          digest=$(scripts/ci/image-digest.sh "$IMAGE_REPOSITORY:$GITHUB_SHA")
+          echo "IMAGE_DIGEST=$digest" >> "$GITHUB_ENV"
+      - name: Initialiser OpenTofu
+        run: scripts/ci/tofu-init.sh infra/envs/preview
+      - name: Préparer le canal de déploiement
+        # Les sorties sensibles sont masquées, puis écrites dans des fichiers
+        # que le runner supprime à la fin du job.
+        env:
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+        run: |
+          tofu -chdir=infra/envs/preview output -json \
+            | scripts/ci/prepare-remote.sh preview "$RUNNER_TEMP/remote"
+      - name: Réinitialiser le mot de passe du compte d'administration
+        # OVHcloud ne montre ce mot de passe qu'à sa définition : il est généré
+        # ici, masqué, remis au job par un fichier, et n'est conservé nulle part.
+        run: |
+          scripts/ci/reset-db-admin.sh "$TF_VAR_project_id" "$DATABASE_CLUSTER_ID" \
+            "$RUNNER_TEMP/remote/job.env"
+      - name: Amorcer la base depuis l'instance
+        env:
+          JOB_ENV_FILE: ${{ runner.temp }}/remote/job.env
+        run: scripts/ci/remote.sh job db-bootstrap
