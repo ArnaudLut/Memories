@@ -1,0 +1,12 @@
+# Le contexte de construction ne contient que ce que le Dockerfile copie.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!packages
+!apps
+!db
+!deploy/release
+**/node_modules
+**/dist

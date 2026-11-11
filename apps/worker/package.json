@@ -1,0 +1,13 @@
+{
+  "name": "@memoire/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json"
+  },
+  "dependencies": {
+    "@memoire/core": "workspace:*",
+    "pg-boss": "12.38.1"
+  }
+}
