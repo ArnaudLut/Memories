@@ -1,0 +1,14 @@
+# Répertoires de travail d'OpenTofu. Les fichiers .terraform.lock.hcl, eux, sont suivis.
+.terraform/
+
+# États, plans et leur forme JSON : ils contiennent des secrets.
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.json
+
+# Fichier temporaire posé par scripts/bootstrap.sh pour la première application.
+backend_override.tf
+
+crash.log
+__pycache__/
