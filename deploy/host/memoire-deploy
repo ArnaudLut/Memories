@@ -1,0 +1,228 @@
+#!/bin/bash
+#
+# memoire-deploy : commande forcée du canal de déploiement.
+#
+# La CI ouvre « ssh -T deploy@<instance> ». La seule clé autorisée de ce compte
+# impose « sudo /usr/local/sbin/memoire-deploy ». Le script reçoit sur son entrée
+# standard une archive tar d'au plus 1 Mio, qu'il tient pour hostile. Il charge
+# ensuite l'image demandée et passe la main au deploy.sh livré dans cette image.
+#
+# Ce fichier voyage dans user_data : le modifier, même d'un commentaire,
+# réinstalle l'instance. Tout ce qui doit pouvoir évoluer vit dans
+# deploy/release/.
+#
+# Membres admis, fichiers ordinaires à la racine de l'archive :
+#   request.env     obligatoire. ACTION=deploy|job, IMAGE_DIGEST=sha256:<64 hex>,
+#                   REGISTRY_USER (exigé avec registry-token),
+#                   JOB=migrate|db-bootstrap|verify (exigé avec ACTION=job).
+#   app.env         installé dans /etc/memoire/app.env (root, 0600).
+#   db-ca.pem       installé dans /etc/memoire/db-ca.pem (0644).
+#   registry-token  jeton du registre, lu par docker login sur son entrée standard.
+#   job.env         variables d'un job, gardées dans un répertoire temporaire.
+# Les trois fichiers .env sont faits de lignes CLÉ=VALEUR en ASCII imprimable ;
+# chaque valeur est transmise telle quelle, sans interprétation.
+#
+# Codes de sortie : 0 succès ; 10 requête invalide ; 11 image introuvable ou
+# inexploitable ; 12, 13 et 14 viennent de deploy.sh ; 1 instance pas prête, mal
+# configurée ou occupée.
+#
+# Pour les tests, MEMOIRE_ETC_DIR, MEMOIRE_OPT_DIR et MEMOIRE_CONF déplacent les
+# répertoires. En production, sudo (env_reset) efface ces variables.
+
+set -euo pipefail
+# Locale fixe : les classes de caractères des validations restent de l'ASCII.
+export LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+
+readonly ETC_DIR=${MEMOIRE_ETC_DIR:-/etc/memoire}
+readonly OPT_DIR=${MEMOIRE_OPT_DIR:-/opt/memoire}
+readonly CONF=${MEMOIRE_CONF:-$ETC_DIR/deploy.conf}
+readonly MAX_BYTES=1048576
+readonly READY_TIMEOUT=600
+
+log() { printf 'memoire-deploy: %s\n' "$*" >&2; }
+
+die() {
+  local code=$1
+  shift
+  log "$*"
+  exit "$code"
+}
+
+invalid() { die 10 "requête invalide : $*"; }
+
+# Lit un fichier de lignes KEY=VALUE dans le tableau KV, ou échoue. La valeur est
+# tout ce qui suit le premier « = », prise telle quelle : rien ne l'interprète,
+# ni ici ni dans deploy.sh. Sont refusés tout octet hors de l'ASCII imprimable,
+# une clé mal formée et une clé présente deux fois.
+load_env() {
+  local file=$1 line key
+  KV=()
+  [[ $(tr -d '\n -~' < "$file" | wc -c) -eq 0 ]] || return 1
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -n $line ]] || continue
+    [[ $line =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || return 1
+    key=${BASH_REMATCH[1]}
+    [[ -z ${KV[$key]+set} ]] || return 1
+    KV[$key]=${BASH_REMATCH[2]}
+  done < "$file"
+}
+
+# Les secrets reçus ne vivent que dans ce répertoire, en mémoire (/run) et
+# réservé à root.
+tmp=$(mktemp -d /run/memoire-deploy.XXXXXXXX)
+container='' staging=''
+# Appelée par le trap de sortie, ce que shellcheck ne voit pas.
+# shellcheck disable=SC2317
+cleanup() {
+  [[ -z $container ]] || docker rm --force "$container" > /dev/null 2>&1 || true
+  [[ -z $staging ]] || rm -rf "$staging"
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+(($# == 0)) || invalid "aucun argument n'est accepté"
+
+# 1. Recevoir l'archive, bornée en durée et en taille.
+archive=$tmp/request.tar
+timeout 60 head --bytes "$((MAX_BYTES + 1))" > "$archive" \
+  || invalid "archive non reçue en 60 secondes"
+size=$(stat --format %s "$archive")
+((size > 0 && size <= MAX_BYTES)) || invalid "archive vide ou de plus de 1 Mio"
+
+# 2. Inventorier sans rien extraire. Lue sur son entrée standard, tar refuse une
+#    archive compressée au lieu de la décompresser.
+names=$(tar --list --quoting-style=escape --file - < "$archive" 2> /dev/null) \
+  || invalid "archive tar illisible"
+kinds=$(tar --list --verbose --quoting-style=escape --file - < "$archive" 2> /dev/null \
+  | cut --characters 1 | sort --unique | tr -d '\n') \
+  || invalid "archive tar illisible"
+declare -A members=()
+while IFS= read -r name; do
+  case $name in
+    request.env | app.env | db-ca.pem | registry-token | job.env) ;;
+    *) invalid "membre inattendu dans l'archive" ;;
+  esac
+  [[ -z ${members[$name]+set} ]] || invalid "membre en double dans l'archive"
+  members[$name]=1
+done <<< "$names"
+[[ -n ${members[request.env]+set} ]] || invalid "request.env manquant"
+# Le premier caractère de la liste détaillée donne le type : ni lien, ni
+# répertoire, ni périphérique.
+[[ $kinds == - ]] || invalid "seuls les fichiers ordinaires sont admis"
+
+# 3. Extraire vers la sortie standard : tar n'écrit lui-même aucun fichier, donc
+#    ni chemin ni lien ne peut sortir du répertoire temporaire.
+mkdir "$tmp/in"
+for name in "${!members[@]}"; do
+  tar --extract --to-stdout --file - "$name" < "$archive" 2> /dev/null \
+    | head --bytes "$((MAX_BYTES + 1))" > "$tmp/in/$name" \
+    || invalid "membre $name illisible"
+  (($(stat --format %s "$tmp/in/$name") <= MAX_BYTES)) || invalid "membre $name de plus de 1 Mio"
+done
+
+# 4. Valider la requête, valeur par valeur.
+declare -A KV=()
+load_env "$tmp/in/request.env" || invalid "request.env mal formé"
+for key in "${!KV[@]}"; do
+  [[ ' ACTION IMAGE_DIGEST REGISTRY_USER JOB ' == *" $key "* ]] \
+    || invalid "clé inconnue dans request.env"
+done
+action=${KV[ACTION]-} digest=${KV[IMAGE_DIGEST]-}
+registry_user=${KV[REGISTRY_USER]-} job=${KV[JOB]-}
+
+digest_format='^sha256:[0-9a-f]{64}$'
+[[ $digest =~ $digest_format ]] \
+  || invalid "IMAGE_DIGEST doit valoir sha256: suivi de 64 chiffres hexadécimaux"
+case $action in
+  deploy)
+    [[ -z $job && -z ${members[job.env]+set} ]] \
+      || invalid "JOB et job.env sont réservés à ACTION=job"
+    ;;
+  job)
+    [[ $job == migrate || $job == db-bootstrap || $job == verify ]] \
+      || invalid "JOB doit valoir migrate, db-bootstrap ou verify"
+    ;;
+  *) invalid "ACTION doit valoir deploy ou job" ;;
+esac
+user_format='^[A-Za-z0-9][A-Za-z0-9._-]*(\[bot\])?$'
+[[ -z $registry_user || $registry_user =~ $user_format ]] || invalid "REGISTRY_USER mal formé"
+[[ -z ${members[registry-token]+set} || -n $registry_user ]] \
+  || invalid "registry-token exige REGISTRY_USER"
+for name in app.env job.env; do
+  [[ -z ${members[$name]+set} ]] || load_env "$tmp/in/$name" || invalid "$name mal formé"
+done
+
+# 5. Lire la configuration de l'instance, écrite par cloud-init. Le dépôt
+#    d'images y est figé : une clé de déploiement volée ne lance que ses images.
+load_env "$CONF" || die 1 "configuration de l'instance illisible : $CONF"
+app_env=${KV[APP_ENV]-} repository=${KV[IMAGE_REPOSITORY]-} registry=${KV[REGISTRY_HOST]-}
+[[ -n $app_env && -n $registry && $repository == "$registry"/?* ]] \
+  || die 1 "configuration de l'instance incomplète : $CONF"
+image=$repository@$digest
+
+# 6. Au premier démarrage, cloud-init installe encore Docker et le pare-feu. Son
+#    dernier geste crée ce témoin : on l'attend plutôt que d'échouer.
+for ((waited = 0; waited < READY_TIMEOUT; waited += 5)); do
+  [[ ! -e $ETC_DIR/provisioned ]] || break
+  sleep 5
+done
+[[ -e $ETC_DIR/provisioned ]] \
+  || die 1 "l'instance n'a pas fini son initialisation (voir /var/log/cloud-init-output.log)"
+
+# 7. Un seul déploiement à la fois.
+install --directory --mode 0700 "$OPT_DIR" "$OPT_DIR/releases"
+exec 9> "$OPT_DIR/lock"
+flock --wait 900 9 || die 1 "un autre déploiement occupe l'instance depuis quinze minutes"
+
+# 8. Charger l'image. Les identifiants du registre restent dans le répertoire
+#    temporaire et sont retirés dès l'image chargée.
+mkdir "$tmp/docker"
+registry_cli() { DOCKER_CONFIG=$tmp/docker docker "$@"; }
+if [[ -n ${members[registry-token]+set} ]]; then
+  if ! registry_cli login --username "$registry_user" --password-stdin "$registry" \
+    < "$tmp/in/registry-token" > /dev/null 2> "$tmp/login.err"; then
+    cat "$tmp/login.err" >&2
+    die 11 "connexion au registre $registry refusée"
+  fi
+fi
+pulled=0
+registry_cli pull --quiet "$image" > /dev/null && pulled=1
+registry_cli logout "$registry" > /dev/null 2>&1 || true
+((pulled)) || die 11 "image introuvable : $image"
+
+# 9. Sortir /opt/deploy de l'image, une fois par empreinte. Le conteneur n'est
+#    jamais démarré.
+release=$OPT_DIR/releases/${digest#sha256:}
+if [[ ! -d $release ]]; then
+  staging=$(mktemp -d "$OPT_DIR/releases/.staging.XXXXXXXX")
+  container=$(docker create "$image" /bin/true) || die 11 "image inexploitable : $image"
+  docker cp --quiet "$container:/opt/deploy/." "$staging" > /dev/null 2>&1 \
+    || die 11 "l'image ne contient pas /opt/deploy"
+  docker rm "$container" > /dev/null
+  container=''
+  [[ -f $staging/deploy.sh && ! -L $staging/deploy.sh ]] \
+    || die 11 "l'image ne contient pas /opt/deploy/deploy.sh"
+  mv "$staging" "$release"
+  staging=''
+fi
+
+# 10. Installer la configuration reçue, par renommage pour ne jamais laisser un
+#     fichier à moitié écrit.
+install_config() {
+  [[ -n ${members[$1]+set} ]] || return 0
+  install --mode "$2" "$tmp/in/$1" "$ETC_DIR/$1.new"
+  mv --force "$ETC_DIR/$1.new" "$ETC_DIR/$1"
+}
+install_config app.env 0600
+install_config db-ca.pem 0644
+
+# 11. Passer la main à la version livrée dans l'image. Le verrou reste tenu par
+#     ce script seul : aucun processus lancé par deploy.sh ne peut le garder.
+unset JOB_ENV_FILE
+export IMAGE=$image RELEASE_DIR=$release APP_ENV=$app_env
+export APP_ENV_FILE=$ETC_DIR/app.env DB_CA_FILE=$ETC_DIR/db-ca.pem
+[[ -z ${members[job.env]+set} ]] || export JOB_ENV_FILE=$tmp/in/job.env
+status=0
+bash "$release/deploy.sh" "$action" ${job:+"$job"} < /dev/null 9>&- || status=$?
+exit "$status"

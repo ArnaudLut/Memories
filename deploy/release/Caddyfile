@@ -1,0 +1,27 @@
+# Caddy termine TLS et relaie les requêtes vers le service.
+#
+# PUBLIC_HOSTNAME et ACME_EMAIL viennent de app.env. Caddy les substitue dans ce
+# texte avant de l'analyser : deploy.sh vérifie donc leur forme avant de les lui
+# transmettre.
+{
+	email {$ACME_EMAIL}
+
+	# Le site n'a pas de directive « log » : Caddy n'écrit aucun journal d'accès.
+	# Ses journaux d'erreurs décrivent pourtant la requête fautive. Ce filtre en
+	# retire l'adresse IP, les en-têtes et les paramètres de l'URL, qui sont des
+	# données personnelles.
+	log {
+		format filter {
+			request>remote_ip delete
+			request>remote_port delete
+			request>client_ip delete
+			request>headers delete
+			request>uri regexp "\?.*" ""
+		}
+	}
+}
+
+{$PUBLIC_HOSTNAME} {
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy server:8080
+}
