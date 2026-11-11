@@ -110,11 +110,18 @@ use_local_state() {
 # Relit par l'API la clé S3 du bucket des états : GitHub ne rend pas les secrets
 # qu'on lui confie, et cette clé n'est conservée nulle part ailleurs.
 recover_state_key() {
-  local users=/cloud/project/$project_id/user user
-  user=$(ovh_api GET "$users" \
-    | jq --raw-output '[.[] | select(.description == "memoire-state")][0].id // empty')
-  [[ -n $user ]] || die "l'utilisateur S3 « memoire-state » est introuvable dans le projet $project_id"
-  AWS_ACCESS_KEY_ID=$(ovh_api GET "$users/$user/s3Credentials" | jq --raw-output '.[0].access // empty')
+  local users=/cloud/project/$project_id/user candidates user
+  candidates=$(ovh_api GET "$users" \
+    | jq --raw-output '.[] | select(.description == "memoire-state") | .id')
+  [[ -n $candidates ]] || die "l'utilisateur S3 « memoire-state » est introuvable dans le projet $project_id"
+  # Un arrêt brutal d'OpenTofu pendant le premier amorçage (second Ctrl-C,
+  # coupure) peut laisser un homonyme sans clé, que l'état ne connaît pas :
+  # l'utilisateur de l'état est celui qui porte une clé.
+  AWS_ACCESS_KEY_ID=''
+  for user in $candidates; do
+    AWS_ACCESS_KEY_ID=$(ovh_api GET "$users/$user/s3Credentials" | jq --raw-output '.[0].access // empty')
+    [[ -z $AWS_ACCESS_KEY_ID ]] || break
+  done
   [[ -n $AWS_ACCESS_KEY_ID ]] || die "l'utilisateur S3 « memoire-state » n'a plus de clé"
   AWS_SECRET_ACCESS_KEY=$(ovh_api POST "$users/$user/s3Credentials/$AWS_ACCESS_KEY_ID/secret" \
     | jq --raw-output '.secret // empty')
@@ -241,6 +248,26 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+# apply [options] : applique la pile, avec deux précautions pour qu'une simple
+# relance suffise après une interruption.
+# - Une création du bucket interrompue le laisse marqué « tainted » : OpenTofu
+#   voudrait le remplacer, ce que prevent_destroy refuse à chaque relance. Le
+#   bucket existe : la marque est retirée.
+# - OpenTofu ne traite pas SIGHUP : à la fermeture du terminal, il s'arrêterait
+#   net, sans enregistrer les ressources déjà créées, et la relance les
+#   créerait une seconde fois. Il l'ignore donc et finit l'application en
+#   cours ; cette commande s'arrête juste après.
+apply() {
+  if tofu -chdir="$ROOT" show -json 2> /dev/null \
+    | jq --exit-status 'any(.values.root_module.resources[]?; .address == "ovh_cloud_storage_object_bucket.state" and .tainted == true)' > /dev/null; then
+    tofu -chdir="$ROOT" untaint ovh_cloud_storage_object_bucket.state
+  fi
+  (
+    trap '' HUP
+    exec tofu -chdir="$ROOT" apply "$@"
+  )
+}
+
 # 5. Ramener l'état sur ce poste, puis appliquer.
 if [[ $state == bucket ]]; then
   info "Lecture de l'état dans le bucket $state_bucket."
@@ -257,12 +284,12 @@ else
 fi
 
 if [[ $action == rotate ]]; then
-  tofu -chdir="$ROOT" apply \
+  apply \
     -replace=ovh_me_api_oauth2_client.ci \
     -replace=ovh_cloud_project_user_s3_credential.state
   rotated=yes
 else
-  tofu -chdir="$ROOT" apply
+  apply
 fi
 
 # 6. Inscrire les sorties dans le dépôt. Chaque valeur passe par l'entrée
@@ -309,24 +336,30 @@ rm -f "$ROOT/terraform.tfstate" "$ROOT/terraform.tfstate.backup"
 # Les workflows ne touchent à OVHcloud qu'une fois cette variable posée. La
 # valeur « false » est celle d'un arrêt de la dépense (BOOTSTRAP.md) : elle
 # n'est pas écrasée, sans quoi le commit suivant de main recréerait l'instance
-# et la base.
+# et la base. Il en va de même de toute valeur autre que « true » : GitHub
+# compare sans tenir compte de la casse, et « False » ou « 0 » désarment aussi
+# les workflows.
 bootstrapped=$(repository_variable OVH_BOOTSTRAPPED)
-[[ $bootstrapped == false ]] || set_variable OVH_BOOTSTRAPPED true
+stopped=''
+[[ -z $bootstrapped || $(printf '%s' "$bootstrapped" | tr '[:upper:]' '[:lower:]') == true ]] || stopped=yes
+[[ -n $stopped ]] || set_variable OVH_BOOTSTRAPPED true
 
 info ""
 if [[ $action == rotate ]]; then
   info "Le compte de service et la clé S3 sont renouvelés, et les secrets du dépôt mis à jour."
 elif [[ -n $bootstrapped ]]; then
   # Relance après un amorçage déjà mené à son terme, ou reprise d'un
-  # renouvellement interrompu : la suite des opérations a déjà eu lieu.
-  info "Amorçage terminé. Les variables et les secrets du dépôt sont à jour et l'état est rangé dans le bucket : aucune autre opération n'est à refaire."
+  # renouvellement interrompu : la suite des opérations a déjà eu lieu. Un
+  # premier amorçage interrompu pendant sa toute dernière écriture arrive ici
+  # aussi : la dernière phrase lui indique la suite.
+  info "Amorçage terminé. Les variables et les secrets du dépôt sont à jour et l'état est rangé dans le bucket : aucune autre opération n'est à refaire. Si le premier déploiement n'a pas encore eu lieu, la suite est celle des gestes 4 et 5 de BOOTSTRAP.md."
 else
   info "Amorçage terminé. Suite des opérations, détaillée dans BOOTSTRAP.md :"
   info "  1. fusionner la pull request, ce qui lance le workflow « Déployer » ;"
   info "  2. lancer une fois le workflow « Amorcer la base », puis relancer « Déployer » ;"
   info "  3. lancer le workflow « Vérifier l'étape 1 »."
 fi
-if [[ $bootstrapped == false ]]; then
-  info "La variable OVH_BOOTSTRAPPED reste à « false » : les workflows ne touchent pas à OVHcloud. Pour reprendre, lancez : gh variable set OVH_BOOTSTRAPPED --body true"
+if [[ -n $stopped ]]; then
+  info "La variable OVH_BOOTSTRAPPED reste à « $bootstrapped » : les workflows ne touchent pas à OVHcloud. Pour reprendre, lancez : gh variable set OVH_BOOTSTRAPPED --body true"
 fi
 info "Révoquez maintenant les identifiants personnels créés pour cette commande."
