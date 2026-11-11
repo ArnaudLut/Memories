@@ -20,7 +20,10 @@
 #   registry-token  jeton du registre, lu par docker login sur son entrée standard.
 #   job.env         variables d'un job, gardées dans un répertoire temporaire.
 # Les trois fichiers .env sont faits de lignes CLÉ=VALEUR en ASCII imprimable ;
-# chaque valeur est transmise telle quelle, sans interprétation.
+# chaque valeur est transmise telle quelle, sans interprétation. app.env et
+# job.env n'admettent que les clés de l'application : APP_*, PUBLIC_*, ACME_*,
+# PG*, DB_* et PORT pour app.env, DB_ADMIN_USER et DB_ADMIN_PASSWORD pour
+# job.env.
 #
 # Codes de sortie : 0 succès ; 10 requête invalide ; 11 image introuvable ou
 # inexploitable ; 12, 13 et 14 viennent de deploy.sh ; 1 instance pas prête, mal
@@ -40,7 +43,7 @@ readonly CONF=${MEMOIRE_CONF:-$ETC_DIR/deploy.conf}
 readonly MAX_BYTES=1048576
 readonly READY_TIMEOUT=600
 
-log() { printf 'memoire-deploy: %s\n' "$*" >&2; }
+log() { printf 'memoire-deploy : %s\n' "$*" >&2; }
 
 die() {
   local code=$1
@@ -149,8 +152,19 @@ user_format='^[A-Za-z0-9][A-Za-z0-9._-]*(\[bot\])?$'
 [[ -z $registry_user || $registry_user =~ $user_format ]] || invalid "REGISTRY_USER mal formé"
 [[ -z ${members[registry-token]+set} || -n $registry_user ]] \
   || invalid "registry-token exige REGISTRY_USER"
+# app.env et job.env deviennent l'environnement des conteneurs. Seules les clés
+# de l'application y sont admises : NODE_OPTIONS, LD_PRELOAD ou PATH feraient
+# exécuter un code choisi par l'expéditeur.
+app_key_format='^(APP_[A-Z0-9_]+|PUBLIC_[A-Z0-9_]+|ACME_[A-Z0-9_]+|PG[A-Z]+|DB_[A-Z0-9_]+|PORT)$'
+job_key_format='^DB_ADMIN_(USER|PASSWORD)$'
 for name in app.env job.env; do
-  [[ -z ${members[$name]+set} ]] || load_env "$tmp/in/$name" || invalid "$name mal formé"
+  [[ -n ${members[$name]+set} ]] || continue
+  load_env "$tmp/in/$name" || invalid "$name mal formé"
+  key_format=$app_key_format
+  [[ $name == app.env ]] || key_format=$job_key_format
+  for key in "${!KV[@]}"; do
+    [[ $key =~ $key_format ]] || invalid "clé non admise dans $name"
+  done
 done
 
 # 5. Lire la configuration de l'instance, écrite par cloud-init. Le dépôt
@@ -219,10 +233,16 @@ install_config db-ca.pem 0644
 
 # 11. Passer la main à la version livrée dans l'image. Le verrou reste tenu par
 #     ce script seul : aucun processus lancé par deploy.sh ne peut le garder.
+#     Les sorties de deploy.sh passent par deux relais : si le client SSH
+#     disparaît, sshd ferme ses tubes, et sans relais la première écriture
+#     tuerait Compose puis deploy.sh au milieu de la bascule, sans retour
+#     arrière. Un relais qui ne peut plus transmettre lit jusqu'au bout et jette.
 unset JOB_ENV_FILE
 export IMAGE=$image RELEASE_DIR=$release APP_ENV=$app_env
 export APP_ENV_FILE=$ETC_DIR/app.env DB_CA_FILE=$ETC_DIR/db-ca.pem
 [[ -z ${members[job.env]+set} ]] || export JOB_ENV_FILE=$tmp/in/job.env
+relay() { cat 2> /dev/null || cat > /dev/null; }
 status=0
-bash "$release/deploy.sh" "$action" ${job:+"$job"} < /dev/null 9>&- || status=$?
+bash "$release/deploy.sh" "$action" ${job:+"$job"} < /dev/null 9>&- \
+  > >(exec 9>&-; relay) 2> >(exec 9>&-; relay >&2) || status=$?
 exit "$status"

@@ -103,8 +103,10 @@ users:
     ssh_authorized_keys:
       - ${jsonencode("restrict,command=\"sudo /usr/local/sbin/memoire-deploy\" ${trimspace(deploy_public_key)}")}
 %{ if length(admin_public_keys) > 0 ~}
-  # Compte d'administration, créé seulement quand des clés sont fournies.
-  - name: admin
+  # Compte d'administration, créé seulement quand des clés sont fournies. Il ne
+  # s'appelle pas admin : les images cloud d'Ubuntu ont déjà un groupe système
+  # de ce nom, et useradd refuserait de créer le compte.
+  - name: ops
     shell: /bin/bash
     lock_passwd: true
     sudo: "ALL=(ALL) NOPASSWD:ALL"
@@ -140,7 +142,7 @@ write_files:
       PasswordAuthentication no
       KbdInteractiveAuthentication no
       AuthenticationMethods publickey
-      AllowUsers deploy admin
+      AllowUsers deploy ops
 
   # Journaux des conteneurs : 50 Mo au plus par conteneur.
   - path: /etc/docker/daemon.json

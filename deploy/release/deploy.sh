@@ -36,7 +36,7 @@ readonly BASE_DIR=${RELEASE_DIR%/releases/*}
 # Délai laissé aux conteneurs d'une version pour devenir sains, en secondes.
 readonly WAIT_TIMEOUT=120
 
-log() { printf 'deploy.sh: %s\n' "$*" >&2; }
+log() { printf 'deploy.sh : %s\n' "$*" >&2; }
 
 die() {
   local code=$1
@@ -63,9 +63,12 @@ load_site_settings() {
 
 # compose <répertoire de version> <image> <arguments de docker compose>
 compose() {
-  local dir=$1 image=$2
+  local dir=$1 image=$2 ca
   shift 2
-  IMAGE=$image docker compose --file "$dir/compose.yaml" "$@"
+  # Empreinte de l'autorité de la base, portée par une étiquette des conteneurs :
+  # quand le fichier change, Compose les recrée et ils montent le nouveau.
+  ca=$(sha256sum < "$DB_CA_FILE" | cut --delimiter ' ' --fields 1)
+  IMAGE=$image DB_CA_SHA256=$ca docker compose --file "$dir/compose.yaml" "$@"
 }
 
 # Lance un job dans un conteneur ponctuel. La sortie standard est celle du job.

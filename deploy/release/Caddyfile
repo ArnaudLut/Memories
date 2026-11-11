@@ -6,6 +6,10 @@
 {
 	email {$ACME_EMAIL}
 
+	# Une seule autorité : sans cette ligne, Caddy se rabat sur ZeroSSL quand
+	# Let's Encrypt échoue, et lui transmet l'adresse de contact.
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+
 	# Le site n'a pas de directive « log » : Caddy n'écrit aucun journal d'accès.
 	# Ses journaux d'erreurs décrivent pourtant la requête fautive. Ce filtre en
 	# retire l'adresse IP, les en-têtes et les paramètres de l'URL, qui sont des

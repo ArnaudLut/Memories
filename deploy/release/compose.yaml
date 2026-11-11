@@ -1,6 +1,10 @@
 # Pile de Mémoire sur l'instance. Ce fichier est livré dans l'image, sous
 # /opt/deploy, et n'est lancé que par deploy.sh, qui fournit toutes les
 # variables. MEMOIRE_HTTP_PORT et MEMOIRE_HTTPS_PORT ne servent qu'aux tests.
+#
+# Lors d'un retour arrière, ce fichier est relancé par le deploy.sh de la
+# version qui vient d'échouer, pas par le sien. Toute variable ajoutée ici doit
+# donc rester facultative, sous la forme ${VARIABLE:-}.
 
 name: memoire
 
@@ -16,6 +20,11 @@ x-app: &app
     - ALL
   security_opt:
     - no-new-privileges=true
+  labels:
+    # Empreinte de l'autorité de la base, calculée par deploy.sh : quand
+    # db-ca.pem change, Compose recrée les conteneurs, qui montent alors le
+    # nouveau fichier.
+    memoire.db-ca-sha256: ${DB_CA_SHA256:-}
   env_file:
     # Le format « raw » transmet chaque valeur telle quelle : Compose n'y
     # interprète ni guillemet, ni dollar, ni croisillon.

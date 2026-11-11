@@ -48,7 +48,7 @@ umask 077
 
 readonly MAX_BYTES=1048576
 
-log() { printf 'remote.sh: %s\n' "$*" >&2; }
+log() { printf 'remote.sh : %s\n' "$*" >&2; }
 
 fail() {
   log "$*"
