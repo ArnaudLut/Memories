@@ -219,61 +219,94 @@ run "environment" {
   # Le bloc backend n'est pas lisible depuis un test : la clé est relue dans le
   # fichier, car deux racines sous la même clé partageraient le même état.
   assert {
-    condition     = one(flatten(regexall("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/environment.tf")))) == "preview/terraform.tfstate"
+    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:#.*)?$", file("${path.module}/environment.tf")))) == "preview/terraform.tfstate"
     error_message = "L'état de cet environnement doit être rangé sous la clé preview/terraform.tfstate."
   }
 
   # Les arguments passés aux modules ne se lisent pas non plus depuis un test :
-  # chacun est relu dans main.tf, sur une ligne entière, avec le nombre de fois
-  # où il est attendu.
+  # chacun est relu dans main.tf, sur une ligne entière du bloc qui le reçoit.
+  # Compter les lignes dans tout le fichier laisserait passer deux valeurs
+  # échangées entre deux modules.
   assert {
-    condition = alltrue([
-      for pattern, count in {
-        "region\\s+= var\\.compute_region"                   = 2
-        "vlan_id\\s+= var\\.private_vlan_id"                 = 1
-        "cidr\\s+= var\\.private_subnet_cidr"                = 1
-        "network_id\\s+= module\\.network\\.network_id"      = 2
-        "subnet_id\\s+= module\\.network\\.subnet_id"        = 2
-        "user_data\\s+= local\\.user_data"                   = 1
-        "app_env\\s+= local\\.environment"                   = 1
-        "admin_public_keys\\s+= var\\.admin_ssh_public_keys" = 1
-        "region\\s+= var\\.database_region"                  = 1
-        "backup_region\\s+= var\\.database_backup_region"    = 1
-        "plan\\s+= var\\.database_plan"                      = 1
-        "allowed_cidr\\s+= var\\.private_subnet_cidr"        = 1
-        "hostname\\s+= var\\.hostname"                       = 1
-        "ipv4\\s+= module\\.instance\\.ipv4"                 = 1
-        "project_id\\s+= var\\.project_id"                   = 3
-        "name\\s+= local\\.name"                             = 3
-        "flavor_name\\s+= var\\.instance_flavor"             = 1
-        "image_name\\s+= var\\.instance_image"               = 1
-        "flavor\\s+= var\\.database_flavor"                  = 1
-        "engine_version\\s+= var\\.database_version"         = 1
-        "zone\\s+= var\\.dns_zone"                           = 1
-      } : length(regexall("(?m)^\\s*${pattern}$", file("${path.module}/main.tf"))) == count
-    ])
+    condition = alltrue(flatten([
+      for block, patterns in {
+        "locals" = [
+          "app_env\\s+= local\\.environment",
+          "admin_public_keys\\s+= var\\.admin_ssh_public_keys",
+        ]
+        "module \"network\"" = [
+          "project_id\\s+= var\\.project_id",
+          "region\\s+= var\\.compute_region",
+          "name\\s+= local\\.name",
+          "vlan_id\\s+= var\\.private_vlan_id",
+          "cidr\\s+= var\\.private_subnet_cidr",
+        ]
+        "module \"instance\"" = [
+          "project_id\\s+= var\\.project_id",
+          "region\\s+= var\\.compute_region",
+          "name\\s+= local\\.name",
+          "flavor_name\\s+= var\\.instance_flavor",
+          "image_name\\s+= var\\.instance_image",
+          "network_id\\s+= module\\.network\\.network_id",
+          "subnet_id\\s+= module\\.network\\.subnet_id",
+          "user_data\\s+= local\\.user_data",
+        ]
+        "module \"database\"" = [
+          "project_id\\s+= var\\.project_id",
+          "name\\s+= local\\.name",
+          "region\\s+= var\\.database_region",
+          "backup_region\\s+= var\\.database_backup_region",
+          "plan\\s+= var\\.database_plan",
+          "flavor\\s+= var\\.database_flavor",
+          "engine_version\\s+= var\\.database_version",
+          "network_id\\s+= module\\.network\\.network_id",
+          "subnet_id\\s+= module\\.network\\.subnet_id",
+          "allowed_cidr\\s+= var\\.private_subnet_cidr",
+        ]
+        "module \"dns\"" = [
+          "zone\\s+= var\\.dns_zone",
+          "hostname\\s+= var\\.hostname",
+          "ipv4\\s+= module\\.instance\\.ipv4",
+        ]
+        } : [
+        for pattern in patterns :
+        length(regexall("(?m)^\\s*${pattern}\\s*(?:#.*)?$", one(flatten(regexall("(?s)\\n${block} \\{\\n(.*?)\\n\\}\\n", "\n${file("${path.module}/main.tf")}"))))) == 1
+      ]
+    ]))
     error_message = "Un module ne reçoit plus la valeur attendue : main.tf doit relier le réseau, l'instance, la base et le DNS aux variables de l'environnement."
   }
 
   # Protections qui tiennent en une ligne et qu'aucun plan simulé ne montre.
   assert {
-    condition     = length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true$", file("${path.module}/../../modules/database/main.tf"))) == 2
+    condition = alltrue([
+      for resource in ["ovh_cloud_project_database", "ovh_cloud_project_database_database"] :
+      length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true\\s*(?:#.*)?$", one(flatten(regexall(
+        "(?s)\\nresource \"${resource}\" \"this\" \\{\\n(.*?)\\n\\}\\n", file("${path.module}/../../modules/database/main.tf")
+      ))))) == 1
+    ])
     error_message = "Le service de base de données et la base doivent garder prevent_destroy."
   }
 
   assert {
-    condition     = length(regexall("(?m)^\\s*ignore_changes\\s*=\\s*\\[image_id\\]$", file("${path.module}/../../modules/instance/main.tf"))) == 1
+    condition     = length(regexall("(?m)^\\s*ignore_changes\\s*=\\s*\\[\\s*image_id\\s*,?\\s*\\]\\s*(?:#.*)?$", file("${path.module}/../../modules/instance/main.tf"))) == 1
     error_message = "L'image de l'instance doit rester ignorée après la création : la changer efface le disque."
   }
 
   assert {
-    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true$", file("${path.module}/versions.tf"))) == 2
+    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true\\s*(?:#.*)?$", file("${path.module}/versions.tf"))) == 2
     error_message = "Le chiffrement de l'état et des plans doit rester obligatoire."
   }
 
   assert {
-    condition     = !strcontains(file("${path.module}/../../modules/network/main.tf"), "gateway_ip")
+    condition     = length(regexall("(?m)^\\s*gateway_ip\\s*=", file("${path.module}/../../modules/network/main.tf"))) == 0
     error_message = "Le sous-réseau privé ne doit déclarer aucune passerelle : l'instance y gagnerait une seconde route par défaut."
+  }
+
+  # La base est remplacée par des sorties fixes dans les tests appliqués : la
+  # sortie du module est donc relue dans son fichier.
+  assert {
+    condition     = length(regexall("(?m)^\\s*value\\s*=\\s*data\\.ovh_cloud_project_database_certificates\\.this\\.ca\\s*(?:#.*)?$", file("${path.module}/../../modules/database/outputs.tf"))) == 1
+    error_message = "La sortie ca_pem du module doit publier le certificat lu auprès du service."
   }
 
   assert {
@@ -403,8 +436,8 @@ run "environment_admin_account" {
   # Les images cloud d'Ubuntu ont déjà un groupe système admin : useradd
   # refuserait de créer un compte de ce nom, sans que le déploiement le montre.
   assert {
-    condition     = strcontains(local.user_data, "\n  - name: ops\n") && !strcontains(local.user_data, "- name: admin")
-    error_message = "Le compte d'administration doit s'appeler ops."
+    condition     = strcontains(local.user_data, "\n  - name: ops\n    shell: /bin/bash\n    lock_passwd: true\n    sudo: \"ALL=(ALL) NOPASSWD:ALL\"\n") && !strcontains(local.user_data, "- name: admin")
+    error_message = "Le compte d'administration doit s'appeler ops, sans mot de passe, avec tous les droits par sudo."
   }
 
   assert {
@@ -597,8 +630,8 @@ run "network" {
   }
 
   assert {
-    condition     = ovh_cloud_network_private_vrack.this.region == "GRA11" && ovh_cloud_network_private_vrack.this.vlan_id == 10
-    error_message = "Le réseau doit être créé dans la région demandée, sur le VLAN demandé."
+    condition     = ovh_cloud_network_private_vrack.this.region == "GRA11" && ovh_cloud_network_private_vrack.this.vlan_id == 10 && ovh_cloud_network_private_vrack.this.name == "memoire-essai" && ovh_cloud_network_private_vrack_subnet.this.name == "memoire-essai"
+    error_message = "Le réseau doit être créé dans la région demandée, sur le VLAN demandé, sous le nom demandé."
   }
 
   assert {

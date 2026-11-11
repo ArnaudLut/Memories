@@ -156,18 +156,22 @@ run "state_bucket" {
     error_message = "L'utilisateur S3 ne doit recevoir que le rôle objectstore_operator."
   }
 
+  # La ligne est cherchée dans le bloc du bucket : la même ligne posée sur une
+  # autre ressource ne protégerait pas les états.
   assert {
-    condition     = length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true$", file("${path.module}/main.tf"))) == 1
+    condition = length(regexall("(?m)^\\s*prevent_destroy\\s*=\\s*true\\s*(?:#.*)?$", one(flatten(regexall(
+      "(?s)\\nresource \"ovh_cloud_storage_object_bucket\" \"state\" \\{\\n(.*?)\\n\\}\\n", file("${path.module}/main.tf")
+    ))))) == 1
     error_message = "Le bucket des états doit garder prevent_destroy."
   }
 
   assert {
-    condition     = one(flatten(regexall("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/versions.tf")))) == "bootstrap/terraform.tfstate"
+    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:#.*)?$", file("${path.module}/versions.tf")))) == "bootstrap/terraform.tfstate"
     error_message = "L'état de cette pile doit être rangé sous la clé bootstrap/terraform.tfstate."
   }
 
   assert {
-    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true$", file("${path.module}/versions.tf"))) == 2
+    condition     = length(regexall("(?m)^\\s*enforced\\s*=\\s*true\\s*(?:#.*)?$", file("${path.module}/versions.tf"))) == 2
     error_message = "Le chiffrement de l'état et des plans de cette pile doit rester obligatoire : l'état porte le secret du compte de service et la clé S3."
   }
 

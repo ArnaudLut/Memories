@@ -132,7 +132,7 @@ run "environment" {
   # Le bloc backend n'est pas lisible depuis un test : la clé est relue dans le
   # fichier, car deux racines sous la même clé partageraient le même état.
   assert {
-    condition     = one(flatten(regexall("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/environment.tf")))) == "production/terraform.tfstate"
+    condition     = one(flatten(regexall("(?m)^\\s*key\\s*=\\s*\"([^\"]+)\"\\s*(?:#.*)?$", file("${path.module}/environment.tf")))) == "production/terraform.tfstate"
     error_message = "L'état de cet environnement doit être rangé sous la clé production/terraform.tfstate."
   }
 
@@ -166,5 +166,15 @@ run "same_files_as_preview" {
       file("${path.module}/${name}") == file("${path.module}/../preview/${name}")
     ])
     error_message = "main.tf, outputs.tf, variables.tf et versions.tf doivent rester identiques à ceux de la préversion : seul environment.tf distingue les deux racines."
+  }
+
+  assert {
+    condition     = fileset(path.module, "*.tf") == fileset("${path.module}/../preview", "*.tf")
+    error_message = "Les deux racines doivent compter les mêmes fichiers .tf : un fichier présent d'un seul côté les ferait diverger."
+  }
+
+  assert {
+    condition     = file("${path.module}/.terraform.lock.hcl") == file("${path.module}/../preview/.terraform.lock.hcl")
+    error_message = "Les deux racines doivent verrouiller les mêmes versions des fournisseurs : .terraform.lock.hcl diverge de celui de la préversion."
   }
 }
