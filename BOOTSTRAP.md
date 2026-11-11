@@ -83,15 +83,19 @@ code le refuse. Pour arrêter la dépense de la préversion :
 1. Désarmez d'abord les workflows, sans quoi le prochain commit de `main`
    recréerait l'instance et la base :
    `gh variable set OVH_BOOTSTRAPPED --body false`.
-2. Dans l'espace client, ouvrez le service PostgreSQL `memoire-preview` et
+2. Attendez la fin des exécutions en cours, que montre `gh run list` : un
+   déploiement déjà lancé va à son terme malgré la variable, et recréerait ce
+   que vous allez supprimer.
+3. Dans l'espace client, ouvrez le service PostgreSQL `memoire-preview` et
    désactivez sa protection contre la suppression, puis supprimez ce service
    et l'instance `memoire-preview`. Les données de la base sont perdues.
 
 Le bucket des états, la zone DNS, le réseau privé et les images peuvent
-rester : ils coûtent moins de 1 € par mois. Pour reprendre, remettez la
-variable à `true`, puis relancez le déploiement comme à l'étape 4.3 : il recrée
-l'instance et une base vide, et s'arrête avec le code 12 tant que la base n'est
-pas de nouveau amorcée, comme à l'étape 4.2.
+rester : ils coûtent moins de 1 € par mois. Tant que la variable vaut `false`,
+`scripts/bootstrap.sh` la laisse telle quelle, avec ou sans `rotate`. Pour
+reprendre, remettez la variable à `true`, puis relancez le déploiement comme à
+l'étape 4.3 : il recrée l'instance et une base vide, et s'arrête avec le code
+12 tant que la base n'est pas de nouveau amorcée, comme à l'étape 4.2.
 
 ## Avant de commencer
 
@@ -109,12 +113,14 @@ Il vous faut :
 - une copie du dépôt sur ce poste, placée sur la branche de la pull request de
   l'étape 1 (`gh pr checkout <numéro>`) tant qu'elle n'est pas fusionnée.
 
-Vérifiez le poste depuis la racine du dépôt :
+Vérifiez le poste depuis la racine du dépôt. Les trois premières commandes
+doivent afficher OpenTofu v1.13.x, une version 2.43 ou plus récente de `gh`,
+puis un compte connecté à github.com ; sinon, lancez `gh auth login`.
 
 ```sh
-tofu version       # OpenTofu v1.13.x
-gh --version       # 2.43 ou plus récent
-gh auth status     # connecté à github.com ; sinon « gh auth login »
+tofu version
+gh --version
+gh auth status
 jq --version && openssl version && curl --version && dig -v
 gh repo view --json nameWithOwner --jq .nameWithOwner
 ```
@@ -239,11 +245,12 @@ préversion. Il doit appartenir à la zone, par exemple
 catalogue lu le 10 novembre 2026. Le nom de domaine reste facturé par son
 bureau d'enregistrement.
 
-**Comment vérifier.**
+**Comment vérifier.** La première commande doit afficher les deux serveurs
+d'OVHcloud, la seconde rien pour l'instant.
 
 ```sh
-dig +short NS memoire.example.com            # les deux serveurs d'OVHcloud
-dig +short preview.memoire.example.com       # rien pour l'instant
+dig +short NS memoire.example.com
+dig +short preview.memoire.example.com
 ```
 
 ## Geste 3 : créer des identifiants temporaires et lancer `scripts/bootstrap.sh`
@@ -303,13 +310,19 @@ Ne partagez pas votre écran pendant cette étape : la page des identifiants et
 la phrase de passe s'affichent en clair.
 
 Dans un terminal placé à la racine du dépôt, saisissez les trois valeurs sans
-les écrire dans un fichier ni dans l'historique du terminal. Chaque commande
-attend que vous colliez la valeur puis que vous appuyiez sur Entrée, et
-n'affiche rien :
+les écrire dans un fichier ni dans l'historique du terminal. Lancez ces
+commandes une par une : chacune attend que vous colliez la valeur puis que
+vous appuyiez sur Entrée, et n'affiche rien.
 
 ```sh
 read -rs OVH_APPLICATION_KEY && export OVH_APPLICATION_KEY
+```
+
+```sh
 read -rs OVH_APPLICATION_SECRET && export OVH_APPLICATION_SECRET
+```
+
+```sh
 read -rs OVH_CONSUMER_KEY && export OVH_CONSUMER_KEY
 ```
 
@@ -368,7 +381,8 @@ règles suffisent.
 
 Si l'arrêt survient juste après la création de la clé S3, sur une erreur 403 ou
 `InvalidAccessKeyId` pendant l'envoi de l'état vers le bucket, attendez une
-minute et relancez la même commande.
+minute et relancez la même commande ; après un `rotate`, relancez-la sans
+`rotate`, comme l'indique alors le terminal.
 
 ### 3.5 Révoquer les identifiants personnels
 
@@ -409,11 +423,13 @@ centimes. Le reste est gratuit.
 **Comment vérifier.**
 
 ```sh
-gh secret list      # les cinq secrets
-gh variable list    # les dix variables, dont OVH_BOOTSTRAPPED à true
+gh secret list
+gh variable list
 git status --short --ignored infra/bootstrap
 ```
 
+Les deux premières commandes doivent afficher les cinq secrets, puis les dix
+variables, dont `OVH_BOOTSTRAPPED` à `true`.
 La dernière commande ne doit afficher que `!! infra/bootstrap/.terraform/` :
 aucun état ne reste alors sur le poste. Une ligne qui nomme
 `terraform.tfstate` signale une exécution interrompue, à reprendre comme à
@@ -675,7 +691,7 @@ Pendant le premier déploiement :
   canal de déploiement prêt en moins de dix minutes, et création du compte
   `ops` quand des clés d'administration sont fournies ;
 - l'acceptation par OVHcloud des données d'initialisation de l'instance, qui
-  pèsent environ 31 ko pour une limite de 65 535 octets, et la règle qui
+  pèsent environ 33 ko pour une limite de 65 535 octets, et la règle qui
   interdit aux conteneurs de lire les métadonnées de l'instance ;
 - le téléchargement de l'image par l'instance, avec le jeton du workflow, et
   celui de l'image de Caddy depuis Docker Hub ;

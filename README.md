@@ -48,13 +48,14 @@ Dockerfile       image commune au serveur, au worker et aux jobs
 
 Il faut Node.js 24, à la version que donne `.node-version`, et Docker avec
 Compose. `corepack`, livré avec Node.js, fournit la version de pnpm que fixe
-`package.json`.
+`package.json`. `dev/compose.yaml` lance PostgreSQL 17 avec pgvector, et
+`.env.example` porte les valeurs de la base locale.
 
 ```sh
 corepack enable
 pnpm install
-docker compose -f dev/compose.yaml up -d --wait   # PostgreSQL 17 et pgvector
-cp .env.example .env                              # valeurs de la base locale
+docker compose -f dev/compose.yaml up -d --wait
+cp .env.example .env
 pnpm build
 node --env-file=.env apps/jobs/dist/cli.js db-bootstrap
 node --env-file=.env apps/jobs/dist/cli.js migrate
@@ -73,13 +74,15 @@ Le worker se lance de la même façon, avec `apps/worker/dist/main.js`. Pour
 repartir de zéro, `docker compose -f dev/compose.yaml down --volumes` supprime
 la base locale.
 
-Les contrôles sont ceux de l'intégration continue :
+Les contrôles sont ceux de l'intégration continue. `pnpm lint` passe Biome,
+dont `pnpm format` applique les corrections ; `pnpm test` lance les tests
+unitaires, sans base, et `pnpm test:integration` les tests sur la base locale.
 
 ```sh
-pnpm lint               # Biome ; « pnpm format » applique ses corrections
+pnpm lint
 pnpm typecheck
-pnpm test               # tests unitaires, sans base
-pnpm test:integration   # tests sur la base locale
+pnpm test
+pnpm test:integration
 ```
 
 Les tests d'intégration créent leurs propres bases, nommées `memoire_test_*` :

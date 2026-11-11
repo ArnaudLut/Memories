@@ -11,7 +11,7 @@ racine.
 | --- | --- | --- |
 | `bootstrap/` | Le fondateur, une fois, avec ses identifiants personnels, par `scripts/bootstrap.sh` | Le compte de service de la CI, sa politique IAM, le bucket des états et la clé S3 qui y donne accès |
 | `envs/preview/` | La CI, avec le compte de service | Le réseau privé, l'instance, la base PostgreSQL managée et l'enregistrement DNS de la préversion |
-| `envs/production/` | Personne avant la fin de l'étape 2 | Les mêmes ressources pour la production, seulement validées et essayées d'ici là |
+| `envs/production/` | Personne avant la fin de l'étape 2 | Les mêmes ressources pour la production, seulement validées et testées d'ici là |
 | `modules/` | | Les quatre modules communs aux deux environnements : `network`, `instance`, `database`, `dns` |
 | `policy/` | La CI, avant toute application | Le garde-fou qui refuse un plan destructeur |
 
@@ -47,8 +47,12 @@ de passe. Les racines d'environnement lisent `deploy/cloud-init.yaml.tftpl` et
 ```sh
 tofu fmt -check -recursive infra
 python3 -m unittest discover -s infra/policy/tests
+```
 
-# À répéter dans infra/bootstrap, infra/envs/preview et infra/envs/production.
+Puis, dans chacun des répertoires `infra/bootstrap`, `infra/envs/preview` et
+`infra/envs/production` :
+
+```sh
 tofu init -backend=false -input=false -lockfile=readonly
 tofu validate
 tofu test
@@ -84,58 +88,82 @@ fondateur. Les autres valeurs se retrouvent ainsi :
 - le compte de service, par l'état de `bootstrap`, que la clé S3 et la phrase
   de passe suffisent à lire.
 
-Depuis la racine du dépôt :
+Depuis la racine du dépôt, en quatre temps. Les blocs ne contiennent aucun
+commentaire : dans un terminal, zsh, le shell par défaut de macOS, ne les
+reconnaît pas et en exécuterait le texte.
 
-```sh
-# Valeur d'une variable du dépôt.
-variable() { gh variable list --json name,value --jq ".[] | select(.name == \"$1\") | .value"; }
+1. Le bucket des états, d'après les variables du dépôt :
 
-export STATE_BUCKET=$(variable STATE_BUCKET)
-export STATE_REGION=$(variable STATE_REGION)
-export STATE_ENDPOINT=$(variable STATE_ENDPOINT)
+   ```sh
+   variable() { gh variable list --json name,value --jq ".[] | select(.name == \"$1\") | .value"; }
+   export STATE_BUCKET=$(variable STATE_BUCKET)
+   export STATE_REGION=$(variable STATE_REGION)
+   export STATE_ENDPOINT=$(variable STATE_ENDPOINT)
+   ```
 
-# Chaque commande attend la valeur, sans l'afficher ni l'écrire dans
-# l'historique : la clé d'accès S3, sa clé secrète, puis la phrase de passe.
-read -rs AWS_ACCESS_KEY_ID && export AWS_ACCESS_KEY_ID
-read -rs AWS_SECRET_ACCESS_KEY && export AWS_SECRET_ACCESS_KEY
-read -rs TF_VAR_state_passphrase && export TF_VAR_state_passphrase
+2. La clé d'accès S3, sa clé secrète, puis la phrase de passe. Lancez ces
+   commandes une par une : chacune attend que vous colliez la valeur puis que
+   vous appuyiez sur Entrée, sans l'afficher ni l'écrire dans l'historique.
 
-# Compte de service, lu dans l'état de bootstrap sans être affiché.
-scripts/ci/tofu-init.sh infra/bootstrap
-export OVH_ENDPOINT=ovh-eu
-export OVH_CLIENT_ID=$(tofu -chdir=infra/bootstrap output -raw ci_client_id)
-export OVH_CLIENT_SECRET=$(tofu -chdir=infra/bootstrap output -raw ci_client_secret)
+   ```sh
+   read -rs AWS_ACCESS_KEY_ID && export AWS_ACCESS_KEY_ID
+   ```
 
-# Mêmes valeurs que dans les workflows : avec d'autres, le plan proposerait de
-# modifier l'infrastructure.
-export TF_VAR_project_id=$(variable OVH_PROJECT_ID)
-export TF_VAR_dns_zone=$(variable DNS_ZONE)
-export TF_VAR_hostname=$(variable PREVIEW_HOSTNAME)
-export TF_VAR_acme_email=$(variable ACME_EMAIL)
-# Variable facultative : sans elle, les workflows passent une liste vide.
-keys=$(variable ADMIN_SSH_PUBLIC_KEYS)
-export TF_VAR_admin_ssh_public_keys="${keys:-[]}"
+   ```sh
+   read -rs AWS_SECRET_ACCESS_KEY && export AWS_SECRET_ACCESS_KEY
+   ```
 
-scripts/ci/tofu-init.sh infra/envs/preview
-cd infra/envs/preview
-tofu plan -input=false -out=plan.tfplan
-tofu show -json plan.tfplan > plan.json
-python3 ../../policy/check_plan.py plan.json
-```
+   ```sh
+   read -rs TF_VAR_state_passphrase && export TF_VAR_state_passphrase
+   ```
 
-`plan.tfplan` est chiffré, mais `plan.json` contient les secrets en clair : il
-est ignoré par git et se supprime après usage. Fermez le terminal une fois
-l'opération terminée : son environnement porte les secrets.
+3. Le compte de service, lu dans l'état de `bootstrap` sans être affiché :
+
+   ```sh
+   scripts/ci/tofu-init.sh infra/bootstrap
+   export OVH_ENDPOINT=ovh-eu
+   export OVH_CLIENT_ID=$(tofu -chdir=infra/bootstrap output -raw ci_client_id)
+   export OVH_CLIENT_SECRET=$(tofu -chdir=infra/bootstrap output -raw ci_client_secret)
+   ```
+
+4. Les mêmes valeurs que dans les workflows, sans quoi le plan proposerait de
+   modifier l'infrastructure, puis le plan et le garde-fou. La variable
+   `ADMIN_SSH_PUBLIC_KEYS` est facultative : sans elle, les workflows passent
+   une liste vide.
+
+   ```sh
+   export TF_VAR_project_id=$(variable OVH_PROJECT_ID)
+   export TF_VAR_dns_zone=$(variable DNS_ZONE)
+   export TF_VAR_hostname=$(variable PREVIEW_HOSTNAME)
+   export TF_VAR_acme_email=$(variable ACME_EMAIL)
+   keys=$(variable ADMIN_SSH_PUBLIC_KEYS)
+   export TF_VAR_admin_ssh_public_keys="${keys:-[]}"
+   scripts/ci/tofu-init.sh infra/envs/preview
+   tofu -chdir=infra/envs/preview plan -input=false -out=plan.tfplan \
+     && tofu -chdir=infra/envs/preview show -json plan.tfplan > infra/envs/preview/plan.json \
+     && python3 infra/policy/check_plan.py infra/envs/preview/plan.json
+   ```
+
+Les deux fichiers s'écrivent dans `infra/envs/preview`. `plan.tfplan` est
+chiffré, mais `plan.json` contient les secrets en clair : git l'ignore, et il
+se supprime après usage. Fermez le terminal une fois l'opération terminée :
+son environnement porte les secrets.
 
 `tofu output`, `tofu untaint` et `tofu force-unlock` n'ont besoin que du
 bucket, de la clé S3 et de la phrase de passe : la préparation s'arrête alors
 après les trois commandes `read`, suivies de
-`scripts/ci/tofu-init.sh infra/envs/preview`.
+`scripts/ci/tofu-init.sh infra/envs/preview`. Ces trois commandes d'OpenTofu se
+lancent ensuite depuis la racine du dépôt avec l'option
+`-chdir=infra/envs/preview`, par exemple
+`tofu -chdir=infra/envs/preview output`. Sans cette option, OpenTofu ne lit pas
+l'état du bucket : `tofu untaint` répond que l'état ne contient aucune
+ressource (`No such resource instance`), et `tofu output` qu'il n'y a aucune
+sortie (`No outputs found`).
 
-La pile `bootstrap` se planifie de la même façon depuis `infra/bootstrap`, avec
-les identifiants personnels du fondateur (`OVH_APPLICATION_KEY`,
-`OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`) à la place du compte de service,
-et sans les variables `hostname` et `acme_email`.
+La pile `bootstrap` se planifie de la même façon, avec l'option
+`-chdir=infra/bootstrap`, les identifiants personnels du fondateur
+(`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`) à la
+place du compte de service, et sans les variables `hostname` et `acme_email`.
 
 ## Le garde-fou
 
@@ -210,10 +238,11 @@ protection du code :
 
 - si le service est finalement prêt, levez la marque depuis un poste préparé
   comme dans « Planifier en local », où la clé S3 et la phrase de passe
-  suffisent :
-  `tofu untaint module.database.ovh_cloud_project_database.this` ;
+  suffisent. Depuis la racine du dépôt :
+  `tofu -chdir=infra/envs/preview untaint module.database.ovh_cloud_project_database.this` ;
 - s'il est en erreur, ou pour éviter de préparer un poste, supprimez-le dans
-  l'espace client : au plan suivant, OpenTofu constate son absence et propose
-  de le créer.
+  l'espace client, après avoir désactivé au besoin sa protection contre la
+  suppression, et attendez qu'il ait disparu de la liste des bases : au plan
+  suivant, OpenTofu constate son absence et propose de le créer.
 
 Relancez ensuite le workflow « Déployer ».
