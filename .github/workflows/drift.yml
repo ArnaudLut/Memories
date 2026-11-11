@@ -1,0 +1,55 @@
+# Recherche hebdomadaire d'une dérive : l'infrastructure de la préversion
+# doit correspondre à sa description. Tout écart fait échouer le workflow, et
+# le résumé du job montre ce qu'une application changerait.
+name: Détecter une dérive
+
+on:
+  schedule:
+    # Le lundi à 5 h 23 UTC, à l'écart des heures rondes où GitHub est chargé.
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Nommer bash active « pipefail » : une étape échoue dès qu'un maillon d'un
+    # tube échoue.
+    shell: bash
+
+jobs:
+  drift:
+    name: Dérive de la préversion
+    if: vars.OVH_BOOTSTRAPPED == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      TF_IN_AUTOMATION: "true"
+      OVH_ENDPOINT: ${{ vars.OVH_ENDPOINT }}
+      OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+      OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.STATE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.STATE_S3_SECRET_KEY }}
+      STATE_BUCKET: ${{ vars.STATE_BUCKET }}
+      STATE_REGION: ${{ vars.STATE_REGION }}
+      STATE_ENDPOINT: ${{ vars.STATE_ENDPOINT }}
+      TF_VAR_state_passphrase: ${{ secrets.STATE_PASSPHRASE }}
+      TF_VAR_project_id: ${{ vars.OVH_PROJECT_ID }}
+      TF_VAR_dns_zone: ${{ vars.DNS_ZONE }}
+      TF_VAR_hostname: ${{ vars.PREVIEW_HOSTNAME }}
+      TF_VAR_acme_email: ${{ vars.ACME_EMAIL }}
+      TF_VAR_admin_ssh_public_keys: ${{ vars.ADMIN_SSH_PUBLIC_KEYS || '[]' }}
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Installer OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+      - name: Initialiser OpenTofu
+        run: scripts/ci/tofu-init.sh infra/envs/preview
+      - name: Planifier sans rien attendre
+        run: scripts/ci/plan.sh infra/envs/preview --fail-on-change

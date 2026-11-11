@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# pg_dump en version 17 pour les tests d'intégration de la CI.
+#
+# Le client PostgreSQL des runners de GitHub est en version 16, et pg_dump
+# refuse de sauvegarder un serveur plus récent que lui. Cette commande lance
+# donc le pg_dump de l'image même qui sert de base aux tests : celle du
+# conteneur qui publie le port de la base. Le workflow place ce répertoire en
+# tête du PATH.
+#
+# Les tests ne transmettent à pg_dump que PATH et les variables PG* : c'est
+# tout ce que reçoit le conteneur, qui joint la base par le réseau de l'hôte.
+
+set -euo pipefail
+
+container=$(docker ps --quiet --filter "publish=${PGPORT:-5432}")
+[[ -n $container && $container != *$'\n'* ]] || {
+  echo "pg_dump : aucun conteneur ne publie le port ${PGPORT:-5432}" >&2
+  exit 1
+}
+# L'identifiant de l'image, et non son nom : Docker lance alors l'image déjà
+# présente, sans rien télécharger.
+image=$(docker inspect --format '{{.Image}}' "$container")
+
+env=()
+for name in PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGCONNECT_TIMEOUT; do
+  [[ -z ${!name+set} ]] || env+=(--env "$name")
+done
+exec docker run --rm --network host "${env[@]}" "$image" pg_dump "$@"

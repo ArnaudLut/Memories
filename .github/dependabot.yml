@@ -1,0 +1,40 @@
+# Mises à jour proposées chaque semaine. Toutes les versions du dépôt sont
+# épinglées : seule une pull request les fait évoluer, et la CI la juge.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
+    directories:
+      - /dev
+      - /deploy/release
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: opentofu
+    directories:
+      - /infra/bootstrap
+      - /infra/envs/*
+      - /infra/modules/*
+    schedule:
+      interval: weekly
+    groups:
+      # Racines et modules exigent la même version de chaque fournisseur : une
+      # seule pull request les fait avancer ensemble.
+      opentofu:
+        patterns:
+          - "*"
