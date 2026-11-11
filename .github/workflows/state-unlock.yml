@@ -54,4 +54,6 @@ jobs:
           # L'identifiant passe par l'environnement : une valeur saisie n'est
           # jamais recopiée dans le texte d'une commande.
           LOCK_ID: ${{ inputs.lock_id }}
-        run: tofu -chdir=infra/envs/preview force-unlock -force "$LOCK_ID"
+        # « -- » : une valeur qui commence par un tiret reste un identifiant,
+        # et non une option d'OpenTofu.
+        run: tofu -chdir=infra/envs/preview force-unlock -force -- "$LOCK_ID"

@@ -210,8 +210,8 @@ email_pattern='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$'
 # Le nom du projet est affiché avant toute création : un identifiant recopié
 # d'un autre projet du même compte se voit ici.
 project_name=$(ovh_api GET "/cloud/project/$project_id" \
-  | jq --raw-output '.description // .projectName // empty') \
-  || die "le projet $project_id est introuvable avec ces identifiants OVHcloud"
+  | jq --raw-output '[.description, .projectName] | map(select(type == "string" and . != "")) | first // empty') \
+  || die "le projet $project_id ne se lit pas avec ces identifiants OVHcloud, et rien n'a été modifié. Le code HTTP figure dans l'erreur de curl ci-dessus. 404 : vérifiez l'identifiant du projet, relevé au geste 1 de BOOTSTRAP.md. 400, 401 ou 403 : vérifiez les trois valeurs saisies à l'étape 3.3, ou créez de nouveaux identifiants (étape 3.2)."
 info "Projet Public Cloud : ${project_name:-sans nom} ($project_id)"
 
 # 4. Phrase de passe de l'état.
@@ -235,6 +235,11 @@ export TF_VAR_state_passphrase=$STATE_PASSPHRASE
 export TF_VAR_project_id=$project_id TF_VAR_dns_zone=$dns_zone
 
 trap on_exit EXIT
+# Ctrl-C, ou la fermeture du terminal : sans ces lignes, bash appelle on_exit
+# avec un code nul et la commande s'arrête sans dire comment reprendre.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # 5. Ramener l'état sur ce poste, puis appliquer.
 if [[ $state == bucket ]]; then
@@ -301,16 +306,27 @@ rm -f "$ROOT/backend_override.tf"
 scripts/ci/tofu-init.sh "$ROOT" -migrate-state -force-copy
 rm -f "$ROOT/terraform.tfstate" "$ROOT/terraform.tfstate.backup"
 
-# Les workflows ne touchent à OVHcloud qu'une fois cette variable posée.
-set_variable OVH_BOOTSTRAPPED true
+# Les workflows ne touchent à OVHcloud qu'une fois cette variable posée. La
+# valeur « false » est celle d'un arrêt de la dépense (BOOTSTRAP.md) : elle
+# n'est pas écrasée, sans quoi le commit suivant de main recréerait l'instance
+# et la base.
+bootstrapped=$(repository_variable OVH_BOOTSTRAPPED)
+[[ $bootstrapped == false ]] || set_variable OVH_BOOTSTRAPPED true
 
 info ""
 if [[ $action == rotate ]]; then
   info "Le compte de service et la clé S3 sont renouvelés, et les secrets du dépôt mis à jour."
+elif [[ -n $bootstrapped ]]; then
+  # Relance après un amorçage déjà mené à son terme, ou reprise d'un
+  # renouvellement interrompu : la suite des opérations a déjà eu lieu.
+  info "Amorçage terminé. Les variables et les secrets du dépôt sont à jour et l'état est rangé dans le bucket : aucune autre opération n'est à refaire."
 else
   info "Amorçage terminé. Suite des opérations, détaillée dans BOOTSTRAP.md :"
   info "  1. fusionner la pull request, ce qui lance le workflow « Déployer » ;"
   info "  2. lancer une fois le workflow « Amorcer la base », puis relancer « Déployer » ;"
   info "  3. lancer le workflow « Vérifier l'étape 1 »."
+fi
+if [[ $bootstrapped == false ]]; then
+  info "La variable OVH_BOOTSTRAPPED reste à « false » : les workflows ne touchent pas à OVHcloud. Pour reprendre, lancez : gh variable set OVH_BOOTSTRAPPED --body true"
 fi
 info "Révoquez maintenant les identifiants personnels créés pour cette commande."

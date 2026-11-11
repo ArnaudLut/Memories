@@ -100,7 +100,7 @@ jobs:
           tofu_wrapper: false
       - name: Contrôler la mise en forme
         run: tofu fmt -check -recursive infra
-      - name: Valider et essayer chaque racine
+      - name: Valider et tester chaque racine
         # Sans backend : ni identifiant ni phrase de passe ne sont nécessaires.
         run: |
           for root in infra/bootstrap infra/envs/preview infra/envs/production; do
@@ -110,7 +110,7 @@ jobs:
             tofu -chdir="$root" test
             echo "::endgroup::"
           done
-      - name: Essayer le garde-fou des plans
+      - name: Tester le garde-fou des plans
         run: python3 -m unittest discover -s infra/policy/tests
 
   scripts:

@@ -13,6 +13,8 @@
 # Variables d'environnement obligatoires :
 #   LOCK_OUTCOME   résultat de l'étape du verrou (success, failure, cancelled, skipped)
 #   PLAN_OUTCOME   résultat de l'étape du plan
+# Variable facultative :
+#   DATABASE_OUTCOME   résultat de l'étape des contrôles de la base
 #
 # Le tableau part dans $GITHUB_STEP_SUMMARY. Ce script ne décide pas du succès
 # du workflow : chaque étape de contrôle échoue d'elle-même.
@@ -53,7 +55,11 @@ row() {
     ' "$report"
   else
     printf '| Contrôle | Résultat | Détail |\n| --- | --- | --- |\n'
-    printf "| Contrôles de la base | Échec | Aucun rapport n'a été reçu de l'instance : voir le journal de l'étape. |\n"
+    if [[ ${DATABASE_OUTCOME-} == skipped ]]; then
+      printf "| Contrôles de la base | Non exécuté | Une étape précédente a échoué : voir son journal. |\n"
+    else
+      printf "| Contrôles de la base | Échec | Aucun rapport n'a été reçu de l'instance : voir le journal de l'étape. |\n"
+    fi
   fi
   row "Verrou de l'état" "$LOCK_OUTCOME" \
     "Une deuxième écriture conditionnelle est refusée, et l'objet supprimé peut être réécrit."

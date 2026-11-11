@@ -73,6 +73,7 @@ jobs:
           tofu -chdir=infra/envs/preview output -json \
             | scripts/ci/prepare-remote.sh preview "$RUNNER_TEMP/remote"
       - name: Contrôler la base depuis l'instance
+        id: database
         # Le rapport complet reste lisible dans le journal de l'étape ; le
         # tableau de synthèse n'en garde que le verdict de chaque contrôle.
         run: scripts/ci/remote.sh job verify | tee "$RUNNER_TEMP/verify-report.json"
@@ -91,6 +92,7 @@ jobs:
       - name: Écrire le tableau de synthèse
         if: ${{ !cancelled() }}
         env:
+          DATABASE_OUTCOME: ${{ steps.database.outcome }}
           LOCK_OUTCOME: ${{ steps.lock.outcome }}
           PLAN_OUTCOME: ${{ steps.plan.outcome }}
         run: scripts/ci/verify-summary.sh "$RUNNER_TEMP/verify-report.json"

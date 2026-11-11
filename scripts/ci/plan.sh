@@ -42,10 +42,14 @@ output=${GITHUB_OUTPUT:-/dev/null}
 # signaux. À l'annulation d'un job, GitHub ne prévient que le processus de
 # l'étape, c'est-à-dire ce script quand l'étape le lance par « exec » : il
 # transmet l'arrêt à OpenTofu, qui relâche le verrou avant de sortir.
-status=0
+#
+# Le trap est posé avant le lancement : un signal reçu entre le lancement et
+# la lecture du numéro de processus est retenu, puis transmis aussitôt après.
+status=0 tofu_pid='' early_stop=''
+trap 'if [[ -n $tofu_pid ]]; then kill -s TERM "$tofu_pid" 2> /dev/null || true; else early_stop=yes; fi' INT TERM
 tofu -chdir="$root" plan -input=false -lock-timeout=10m -detailed-exitcode -out=plan.tfplan &
 tofu_pid=$!
-trap 'kill -s TERM "$tofu_pid" 2> /dev/null || true' INT TERM
+[[ -z $early_stop ]] || kill -s TERM "$tofu_pid" 2> /dev/null || true
 wait "$tofu_pid" || status=$?
 # Un signal interrompt « wait » avant la fin d'OpenTofu : on l'attend encore.
 while ((status > 128)) && kill -s 0 "$tofu_pid" 2> /dev/null; do
