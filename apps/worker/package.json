@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@memoire/core": "workspace:*",
-    "pg-boss": "12.38.1"
+    "pg-boss": "12.38.2"
   }
 }
