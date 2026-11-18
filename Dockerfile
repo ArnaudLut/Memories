@@ -7,7 +7,7 @@
 # forme que Dependabot sait suivre. NODE_IMAGE permet de tirer la même image
 # depuis un miroir ; par défaut, il désigne l'étape qui porte l'image officielle.
 ARG NODE_IMAGE=node-officielle
-FROM node:24.22.2-trixie-slim@sha256:0820eaa85e07d0490446dd01d14707e17e6108a36988cf374899cd057eb3812d AS node-officielle
+FROM node:26.13.1-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS node-officielle
 
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app
